@@ -7,6 +7,7 @@ import '../services/background.dart';
 import '../services/meesho_api.dart';
 import '../services/web_session.dart';
 import '../services/license.dart';
+import 'activation_screen.dart';
 import '../widgets/brand.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -62,6 +63,34 @@ class SettingsScreen extends StatelessWidget {
                               const Icon(Icons.copy_rounded, size: 16, color: AppColors.blueDeep),
                             ],
                           ),
+                        ),
+                        const Divider(height: 22, color: AppColors.skyLine),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextButton.icon(
+                                onPressed: () => _showLicenseKey(context),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppColors.blueDeep,
+                                  padding: EdgeInsets.zero,
+                                  alignment: Alignment.centerLeft,
+                                ),
+                                icon: const Icon(Icons.key_rounded, size: 17),
+                                label: const Text('View license key',
+                                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: () => _deactivate(context),
+                              style: TextButton.styleFrom(
+                                foregroundColor: AppColors.danger,
+                                padding: EdgeInsets.zero,
+                              ),
+                              icon: const Icon(Icons.link_off_rounded, size: 17),
+                              label: const Text('Deactivate',
+                                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -228,6 +257,44 @@ class SettingsScreen extends StatelessWidget {
         child: Text(t.toUpperCase(),
             style: const TextStyle(fontSize: 11.5, letterSpacing: 1.2, fontWeight: FontWeight.w800, color: AppColors.ink2)),
       );
+
+  void _showLicenseKey(BuildContext context) => _showText(
+        context,
+        'License key',
+        License.activeKey,
+        'No key installed.',
+      );
+
+  /// Releases this device so the same key can be re-issued elsewhere, or so a
+  /// customer can be moved to a different limit.
+  Future<void> _deactivate(BuildContext context) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Deactivate this device?'),
+        content: const Text(
+          'The license will be removed and OTP Flow will ask for a key again. '
+          'Your saved accounts stay on the phone.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Deactivate'),
+          ),
+        ],
+      ),
+    );
+    if (yes != true) return;
+    await License.clear();
+    if (!context.mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const ActivationScreen()),
+      (route) => false,
+    );
+  }
 
   void _showRaw(BuildContext context) => _showText(
         context,
