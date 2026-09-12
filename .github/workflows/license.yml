@@ -1,0 +1,97 @@
+name: Issue license key
+
+# Mint a device-bound key without installing anything locally.
+# Actions tab -> "Issue license key" -> Run workflow -> fill in the boxes.
+#
+# One-time setup:
+#   1. Run this workflow once with mode = genkeys
+#   2. Copy the PUBLIC key into lib/services/license.dart (publicKeyHex)
+#   3. Save the PRIVATE key as a repository secret named LICENSE_PRIVATE_KEY
+#      (Settings -> Secrets and variables -> Actions -> New repository secret)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'genkeys (first time only) or sign'
+        required: true
+        default: 'sign'
+        type: choice
+        options: [sign, genkeys]
+      device:
+        description: 'Device ID from the app (e.g. android_abc1234567-89ab)'
+        required: false
+      accounts:
+        description: 'How many seller accounts this key allows'
+        required: false
+        default: '5'
+      days:
+        description: 'Valid for how many days (0 = never expires)'
+        required: false
+        default: '0'
+
+jobs:
+  license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Install the signing package
+        run: |
+          mkdir -p /tmp/lic
+          cd /tmp/lic
+          cat > pubspec.yaml <<'EOF'
+          name: lic
+          environment:
+            sdk: '>=3.3.0 <4.0.0'
+          dependencies:
+            ed25519_edwards: ^0.3.1
+          EOF
+          mkdir -p tool
+          cp "$GITHUB_WORKSPACE/tool/keygen.dart" tool/keygen.dart
+          dart pub get
+
+      - name: Generate a new keypair
+        if: ${{ inputs.mode == 'genkeys' }}
+        working-directory: /tmp/lic
+        run: |
+          dart run tool/keygen.dart genkeys | tee out.txt
+          {
+            echo '## New keypair'
+            echo ''
+            echo 'Save the PRIVATE key as the `LICENSE_PRIVATE_KEY` secret and put the PUBLIC key in `lib/services/license.dart`.'
+            echo ''
+            echo '```'
+            cat out.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sign a license key
+        if: ${{ inputs.mode == 'sign' }}
+        working-directory: /tmp/lic
+        env:
+          LICENSE_PRIVATE_KEY: ${{ secrets.LICENSE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$LICENSE_PRIVATE_KEY" ]; then
+            echo "::error::LICENSE_PRIVATE_KEY secret is not set. Run this workflow with mode=genkeys first."
+            exit 1
+          fi
+          if [ -z "${{ inputs.device }}" ]; then
+            echo "::error::Device ID is required when mode=sign."
+            exit 1
+          fi
+          dart run tool/keygen.dart sign \
+            --device "${{ inputs.device }}" \
+            --accounts "${{ inputs.accounts }}" \
+            --days "${{ inputs.days }}" | tee out.txt
+          {
+            echo '## License key'
+            echo ''
+            echo '```'
+            cat out.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
