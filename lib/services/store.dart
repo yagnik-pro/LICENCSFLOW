@@ -7,6 +7,7 @@ import '../models/account.dart';
 import '../models/otp_entry.dart';
 import 'meesho_api.dart';
 import 'web_session.dart';
+import 'meesho_http.dart';
 import 'notifier.dart';
 import 'license.dart';
 
@@ -26,6 +27,10 @@ class AppStore extends ChangeNotifier {
   /// Set once Meesho's WAF starts refusing hand-made API calls. Reset on every
   /// app start, so a change on their side is picked up without a reinstall.
   bool apiBlocked = false;
+
+  /// Set if Meesho starts refusing plain HTTP. Reset on every app start so a
+  /// change on their side is picked up without a reinstall.
+  bool httpBlocked = false;
 
   bool busy = false;
   String? busyLabel;
@@ -242,13 +247,44 @@ class AppStore extends ChangeNotifier {
     await Future.wait(List.generate(width.clamp(1, 6), (_) => worker()));
   }
 
+  /// Signs in. Plain HTTP first — it is a single fast request and needs no
+  /// WebView. The WebView path stays as a fallback for the day Meesho decides
+  /// to refuse HTTP clients again, or asks for a captcha.
   Future<String?> _loginOne(Account a) async {
     a.status = AccStatus.working;
     a.lastError = null;
     notifyListeners();
+
+    if (!httpBlocked) {
+      try {
+        final http = await MeeshoHttp.create(const []);
+        final r = await http.login(a.email, a.password);
+        a.cookies = await http.cookies();
+        a.token = r['token'] ?? '';
+        if ((r['identifier'] ?? '').isNotEmpty) a.identifier = r['identifier']!;
+        if ((r['supplierId'] ?? '').isNotEmpty) a.supplierId = r['supplierId']!;
+        final nm = r['storeName'] ?? '';
+        if (nm.isNotEmpty && a.autoName && WebSession.looksLikeStoreName(nm)) {
+          a.name = WebSession.cleanStoreName(nm);
+        }
+        a.lastLogin = DateTime.now().millisecondsSinceEpoch;
+        a.status = AccStatus.ok;
+        return null;
+      } on MeeshoHttpError catch (e) {
+        // Wrong credentials is final; anything else is worth retrying in a
+        // real browser, which Meesho never blocks.
+        if (e.message.toLowerCase().contains('password')) {
+          a.status = AccStatus.error;
+          a.lastError = e.message;
+          return a.lastError;
+        }
+        httpBlocked = true;
+      } catch (_) {
+        httpBlocked = true;
+      }
+    }
+
     try {
-      // Plain HTTP gets a 403 from Meesho's edge, so the login runs in a real
-      // WebView. It also hands back the identifier from the panel URL.
       final r = await WebSession.login(email: a.email, password: a.password);
       a.cookies = r.cookies;
       if (r.identifier.isNotEmpty) a.identifier = r.identifier;
@@ -292,19 +328,35 @@ class AppStore extends ChangeNotifier {
         if (a.identifier.isEmpty) throw SessionExpired();
       }
 
-      // The panel sends exactly this body, so we send the same. Guessing at it
-      // earlier is what produced the 500s.
+      // Plain HTTP first: one request, about a second. The panel-page route is
+      // the fallback, and it is also what discovers supplier_id the first time.
       dynamic data;
-      var gotFromApi = false;
+      var gotQuick = false;
       var pageReady = false;
 
-      if (!apiBlocked && a.supplierId.isNotEmpty) {
+      if (!httpBlocked && a.supplierId.isNotEmpty && a.identifier.isNotEmpty) {
+        try {
+          final http = await MeeshoHttp.create(a.cookies, token: a.token);
+          data = await http.fetchOtps(supplierId: a.supplierId, identifier: a.identifier);
+          a.cookies = await http.cookies();
+          gotQuick = true;
+        } on SessionDead {
+          throw SessionExpired();
+        } catch (_) {
+          httpBlocked = true;
+        }
+      }
+
+      if (!gotQuick && !apiBlocked && a.supplierId.isNotEmpty) {
         try {
           data = await WebSession.apiCall(
             a.cookies,
             '/api/fulfillment/returnRto/fetchDeliveryOTPs',
             identifier: a.identifier,
             storage: a.storage,
+            onCookies: (c) {
+              if (c.isNotEmpty) a.cookies = c;
+            },
             onStorage: (m) {
               if (m.isNotEmpty) a.storage = m;
             },
@@ -314,25 +366,16 @@ class AppStore extends ChangeNotifier {
               'child_supplier_identifier': null,
               'child_supplier_id': null,
             },
-            onCookies: (c) {
-              if (c.isNotEmpty) a.cookies = c;
-            },
           );
-          gotFromApi = true;
+          gotQuick = true;
         } on SessionExpired {
           rethrow;
         } catch (_) {
-          // Only fall back for good: a one-off hiccup shouldn't cost every
-          // later refresh the slow page load.
-          final d = WebSession.lastDebug ?? '';
-          apiBlocked = d.contains('Access Denied') || d.contains('HTTP 403');
+          apiBlocked = true;
         }
       }
 
-      if (!gotFromApi) {
-        // First run for this account, or the API is being refused: open the
-        // Returns page. That pass also hands back the supplier id and store
-        // name, so the next refresh can take the quick route.
+      if (!gotQuick) {
         final panel = await WebSession.fetchOtpsViaPanel(
           a.cookies,
           a.identifier,
@@ -353,7 +396,7 @@ class AppStore extends ChangeNotifier {
       // An empty list from a page that rendered fine just means nothing is
       // pending right now — that is an answer, not a failure.
       a.lastError = null;
-      if (a.otps.isEmpty && !gotFromApi && !pageReady) {
+      if (a.otps.isEmpty && !gotQuick && !pageReady) {
         MeeshoApi.lastRawResponse = WebSession.lastDebug;
         a.lastError = 'Could not read the Returns page - see Settings, Session diagnostics';
       }
