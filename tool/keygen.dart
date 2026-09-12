@@ -12,8 +12,11 @@
 //   LICENSE_PRIVATE_KEY works well.
 //
 //   Issue a key for a customer:
-//     dart run tool/keygen.dart sign --device android_abc123-4567 --accounts 5
-//     dart run tool/keygen.dart sign --device ... --accounts 5 --days 365
+//     dart run tool/keygen.dart sign --request <code they sent> --accounts 5
+//     dart run tool/keygen.dart sign --request <code> --accounts 5 --days 365
+//
+//   The request code is what the app shows on its activation screen; the device
+//   id is wrapped inside it. --device still works if you have the raw id.
 //
 // The device id is inside the signed payload, so a key pasted into a second
 // phone is rejected: the id will not match and the signature cannot be redone.
@@ -48,7 +51,8 @@ void _usage() {
 OTP Flow license tool
 
   dart run tool/keygen.dart genkeys
-  dart run tool/keygen.dart sign --device <deviceId> --accounts <n> [--days <n>] [--key <privateHex>]
+  dart run tool/keygen.dart sign --request <code> --accounts <n> [--days <n>] [--key <privateHex>]
+  dart run tool/keygen.dart sign --device  <deviceId> --accounts <n> [--days <n>]
 
 --key may be omitted if LICENSE_PRIVATE_KEY is set in the environment.
 ''');
@@ -65,13 +69,21 @@ void _genkeys() {
 
 void _sign(List<String> args) {
   final opts = _parse(args);
-  final device = opts['device'];
+  var device = opts['device'];
+  final request = opts['request'];
+  if ((device == null || device.isEmpty) && request != null && request.isNotEmpty) {
+    device = _deviceFromRequest(request);
+    if (device.isEmpty) {
+      stderr.writeln('That request code could not be read. Ask for it again.');
+      exit(1);
+    }
+  }
   final accounts = int.tryParse(opts['accounts'] ?? '');
   final days = int.tryParse(opts['days'] ?? '0') ?? 0;
   final privHex = opts['key'] ?? Platform.environment['LICENSE_PRIVATE_KEY'] ?? '';
 
   if (device == null || device.isEmpty) {
-    stderr.writeln('Missing --device');
+    stderr.writeln('Missing --request (or --device)');
     exit(1);
   }
   if (accounts == null || accounts <= 0) {
@@ -103,6 +115,19 @@ void _sign(List<String> args) {
   stdout.writeln('');
   stdout.writeln('LICENSE KEY:');
   stdout.writeln(key);
+}
+
+/// Unwraps the device id from an app request code.
+String _deviceFromRequest(String code) {
+  try {
+    var v = code.replaceAll(RegExp(r'\s'), '');
+    while (v.length % 4 != 0) {
+      v += '=';
+    }
+    final parts = utf8.decode(base64Url.decode(v)).split('|');
+    if (parts.length >= 3 && parts.first == 'otpflow') return parts[2];
+  } catch (_) {}
+  return '';
 }
 
 Map<String, String> _parse(List<String> args) {
