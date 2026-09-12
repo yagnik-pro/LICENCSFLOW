@@ -17,6 +17,9 @@ dependencies:
   device_info_plus: ^11.1.1
   ed25519_edwards: ^0.3.1
   crypto: ^3.0.6
+  dio: ^5.7.0
+  dio_cookie_manager: ^3.1.1
+  cookie_jar: ^4.0.8
 
 dev_dependencies:
   flutter_test:
