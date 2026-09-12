@@ -69,19 +69,9 @@ class _SplashGateState extends State<SplashGate> {
           transitionDuration: const Duration(milliseconds: 350),
           pageBuilder: (_, __, ___) => License.isActive
               ? const Shell()
-              : ActivationScreen(onActivated: _afterActivation),
+              : const ActivationScreen(),
           transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
         ),
-      );
-    }
-  }
-
-  Future<void> _afterActivation() async {
-    await store.load();
-    if (store.backgroundEnabled) await Background.enable();
-    if (mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const Shell()),
       );
     }
   }
