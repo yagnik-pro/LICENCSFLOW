@@ -24,7 +24,7 @@ class License {
   /// Public half of your signing key. Replace with your own — see
   /// `tool/keygen.dart` or the "Issue license key" GitHub Action.
   static const publicKeyHex =
-      'd77683e99d7e1b7d09658a53dc0198b8f4f7415c980f0a69e7d2e0c9962c0dde';
+      '066ffb39c2addfc321c29a6b16e0c0b069bb0a4256de2167c12717d7634858c7';
 
   static String _deviceId = '';
   static String? _activeKey;
