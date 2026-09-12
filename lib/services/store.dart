@@ -46,7 +46,10 @@ class AppStore extends ChangeNotifier {
     notifyOnNew = p.getBool(_kNotify) ?? true;
     backgroundEnabled = p.getBool(_kBg) ?? true;
     for (final a in accounts) {
+      // Saved OTPs are shown straight away; the silent refresh below only
+      // updates them.
       a.status = a.cookies.isNotEmpty ? AccStatus.ok : AccStatus.needsLogin;
+      a.lastError = null;
     }
     notifyListeners();
     _restartTimer();
@@ -249,6 +252,7 @@ class AppStore extends ChangeNotifier {
       final r = await WebSession.login(email: a.email, password: a.password);
       a.cookies = r.cookies;
       if (r.identifier.isNotEmpty) a.identifier = r.identifier;
+      if (r.storage.isNotEmpty) a.storage = r.storage;
       if (r.storeName.isNotEmpty && a.autoName) a.name = r.storeName;
       a.lastLogin = DateTime.now().millisecondsSinceEpoch;
       a.status = AccStatus.ok;
@@ -300,6 +304,10 @@ class AppStore extends ChangeNotifier {
             a.cookies,
             '/api/fulfillment/returnRto/fetchDeliveryOTPs',
             identifier: a.identifier,
+            storage: a.storage,
+            onStorage: (m) {
+              if (m.isNotEmpty) a.storage = m;
+            },
             body: {
               'supplier_id': int.tryParse(a.supplierId) ?? a.supplierId,
               'identifier': a.identifier,
@@ -328,6 +336,7 @@ class AppStore extends ChangeNotifier {
         final panel = await WebSession.fetchOtpsViaPanel(
           a.cookies,
           a.identifier,
+          storage: a.storage,
           onCookies: (c) {
             if (c.isNotEmpty) a.cookies = c;
           },
@@ -378,6 +387,7 @@ class AppStore extends ChangeNotifier {
         a.cookies,
         '/api/container/supplier/getSupplierDetails',
         identifier: a.identifier,
+        storage: a.storage,
       );
       final id = MeeshoApi.digInto(d, const ['supplier_id', 'supplierId', 'id']);
       final nm = MeeshoApi.digInto(d, const [
