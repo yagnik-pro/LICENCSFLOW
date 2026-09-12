@@ -18,10 +18,14 @@ class LoginResult {
   /// name is saved once instead of being chased on every refresh.
   final String storeName;
 
+  /// localStorage from the panel, saved alongside the cookies.
+  final Map<String, String> storage;
+
   const LoginResult({
     required this.cookies,
     required this.identifier,
     this.storeName = '',
+    this.storage = const {},
   });
 }
 
@@ -92,6 +96,7 @@ class WebSession {
     lastDebug = _history.join('\n\n');
   }
 
+  static Map<String, String> _pendingStorage = const {};
   static HeadlessInAppWebView? _headless;
   static InAppWebViewController? _ctl;
 
@@ -115,11 +120,15 @@ class WebSession {
 
   static Future<void> _installCookies(List<Map<String, String>> cookies) async {
     await _cookieMgr.deleteAllCookies();
+    // Session cookies (no expiry) are dropped when the process dies, so give
+    // restored ones a real lifetime - Meesho invalidates them server-side
+    // anyway, and a dead one just triggers the normal relogin.
+    final oneYear = DateTime.now().add(const Duration(days: 365)).millisecondsSinceEpoch;
     for (final c in cookies) {
       final name = c['name'];
       final value = c['value'];
       if (name == null || value == null) continue;
-      final expires = int.tryParse(c['expires'] ?? '');
+      final expires = int.tryParse(c['expires'] ?? '') ?? oneYear;
       await _cookieMgr.setCookie(
         url: WebUri(base),
         name: name,
@@ -131,6 +140,47 @@ class WebSession {
         expiresDate: expires,
       );
     }
+    await _cookieMgr.flush();
+  }
+
+  // ============================================================ web storage
+  /// Meesho keeps auth material in localStorage as well as in cookies, and a
+  /// fresh WebView starts with an empty one. Saving and restoring it is what
+  /// lets a session survive the app being closed — without this, every start
+  /// looked like a logged-out browser and forced a fresh login.
+  static const _dumpStorageJs = r'''
+(function(){try{
+  var out = {};
+  for (var i = 0; i < localStorage.length; i++) {
+    var k = localStorage.key(i);
+    var v = localStorage.getItem(k);
+    if (k && v != null && v.length < 60000) out[k] = v;
+  }
+  return JSON.stringify(out);
+}catch(e){ return '{}'; }})();
+''';
+
+  static Future<Map<String, String>> dumpStorage(InAppWebViewController c) async {
+    try {
+      final raw = await c.evaluateJavascript(source: _dumpStorageJs);
+      if (raw == null) return {};
+      final decoded = jsonDecode('$raw');
+      if (decoded is! Map) return {};
+      return decoded.map((k, v) => MapEntry('$k', '$v'));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Future<void> installStorage(
+      InAppWebViewController c, Map<String, String> store) async {
+    if (store.isEmpty) return;
+    try {
+      final js = 'try{var d=${jsonEncode(store)};'
+          'for(var k in d){localStorage.setItem(k,d[k]);}'
+          "return 'ok';}catch(e){return 'err';}";
+      await c.callAsyncJavaScript(functionBody: js);
+    } catch (_) {}
   }
 
   // ================================================================ identity
@@ -204,7 +254,9 @@ class WebSession {
     String path, {
     Map<String, dynamic>? body,
     String identifier = '',
+    Map<String, String> storage = const {},
     void Function(List<Map<String, String>>)? onCookies,
+    void Function(Map<String, String>)? onStorage,
   }) {
     return _lock.run(() async {
       await _installCookies(cookies);
@@ -216,6 +268,7 @@ class WebSession {
         await c.loadUrl(urlRequest: URLRequest(url: WebUri(loginUrl)));
         await Future.delayed(const Duration(milliseconds: 1800));
       }
+      await installStorage(c, storage);
 
       final types = <String>[
         if (goodClientType != null) goodClientType!,
@@ -275,6 +328,7 @@ class WebSession {
 
       _record(log.toString());
       onCookies?.call(await dumpCookies());
+      onStorage?.call(await dumpStorage(c));
 
       if (good == null) {
         final t = log.toString();
@@ -466,10 +520,12 @@ class WebSession {
   static Future<PanelResult> fetchOtpsViaPanel(
     List<Map<String, String>> cookies,
     String identifier, {
+    Map<String, String> storage = const {},
     void Function(List<Map<String, String>>)? onCookies,
   }) {
     return _lock.run(() async {
       await _installCookies(cookies);
+      _pendingStorage = storage;
 
       final log = StringBuffer();
       log.writeln('panel returns page  identifier=$identifier');
@@ -488,6 +544,9 @@ class WebSession {
           UserScript(source: _hookJs, injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START),
         ]),
         onWebViewCreated: (c) => ctl = c,
+        onLoadStop: (c, url) async {
+          if (_pendingStorage.isNotEmpty) await installStorage(c, _pendingStorage);
+        },
       );
 
       try {
@@ -663,11 +722,17 @@ class WebSession {
             if (name.isEmpty) await Future.delayed(const Duration(milliseconds: 900));
           }
 
+          final storage = await dumpStorage(c);
           log.writeln('landed on $url with ${cookies.length} cookie(s), '
-              'identifier=$ident, store=${name.isEmpty ? "(not found)" : name}');
+              '${storage.length} storage item(s), identifier=$ident');
           _record(log.toString());
           if (cookies.isEmpty) throw Exception('Logged in but no cookies were set');
-          return LoginResult(cookies: cookies, identifier: ident, storeName: name);
+          return LoginResult(
+            cookies: cookies,
+            identifier: ident,
+            storeName: name,
+            storage: storage,
+          );
         }
 
         if (!filled) {
