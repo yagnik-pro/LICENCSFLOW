@@ -2,14 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../theme.dart';
+import '../main.dart';
+import '../services/background.dart';
 import '../services/license.dart';
 import '../widgets/brand.dart';
 
 /// Shown until this device carries a valid key. The device id is displayed so
 /// the person can send it over; a key issued for any other device is rejected.
 class ActivationScreen extends StatefulWidget {
-  final VoidCallback onActivated;
-  const ActivationScreen({super.key, required this.onActivated});
+  const ActivationScreen({super.key});
 
   @override
   State<ActivationScreen> createState() => _ActivationScreenState();
@@ -33,11 +34,24 @@ class _ActivationScreenState extends State<ActivationScreen> {
     });
     final result = await License.activate(_ctl.text);
     if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _error = result.ok ? null : result.message;
-    });
-    if (result.ok) widget.onActivated();
+    if (!result.ok) {
+      setState(() {
+        _busy = false;
+        _error = result.message;
+      });
+      return;
+    }
+
+    // Bring the app up right here. Doing this from the splash screen's context
+    // did nothing, because that widget was already gone by then — which is why
+    // it only opened after a restart.
+    setState(() => _error = null);
+    await store.load();
+    if (store.backgroundEnabled) await Background.enable();
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const Shell()),
+    );
   }
 
   Future<void> _copyRequest() async {
