@@ -32,6 +32,29 @@ class License {
   static int _expiry = 0;
 
   static String get deviceId => _deviceId;
+
+  /// What the customer copies and sends over. It is just the device id wrapped
+  /// up, so you can paste it straight into the issuing tool without asking them
+  /// for anything else. Nothing secret is inside — it cannot activate anything
+  /// on its own, only a key signed by you can.
+  static String get requestCode {
+    if (_deviceId.isEmpty) return '';
+    final raw = 'otpflow|1|$_deviceId';
+    return base64Url.encode(utf8.encode(raw)).replaceAll('=', '');
+  }
+
+  /// Pulls the device id back out of a request code. Returns '' if it is not one.
+  static String deviceIdFromRequest(String code) {
+    try {
+      var v = code.replaceAll(RegExp(r'\s'), '');
+      while (v.length % 4 != 0) {
+        v += '=';
+      }
+      final parts = utf8.decode(base64Url.decode(v)).split('|');
+      if (parts.length >= 3 && parts.first == 'otpflow') return parts[2];
+    } catch (_) {}
+    return '';
+  }
   static int get maxAccounts => _maxAccounts;
   static bool get isActive => _maxAccounts > 0;
 
