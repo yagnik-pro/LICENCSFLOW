@@ -1,0 +1,424 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../models/account.dart';
+import '../models/otp_entry.dart';
+import 'meesho_api.dart';
+import 'web_session.dart';
+import 'notifier.dart';
+import 'license.dart';
+
+/// Single source of truth for the whole app.
+class AppStore extends ChangeNotifier {
+  static const _kAccounts = 'otpflow.accounts';
+  static const _kInterval = 'otpflow.intervalMin';
+  static const _kNotify = 'otpflow.notify';
+  static const _kBg = 'otpflow.background';
+
+  final List<Account> accounts = [];
+  /// 0 = only when the app opens or you tap refresh.
+  int intervalMin = 0;
+  bool notifyOnNew = true;
+  bool backgroundEnabled = true;
+
+  /// Set once Meesho's WAF starts refusing hand-made API calls. Reset on every
+  /// app start, so a change on their side is picked up without a reinstall.
+  bool apiBlocked = false;
+
+  bool busy = false;
+  String? busyLabel;
+  Timer? _timer;
+
+  // ------------------------------------------------------------ lifecycle
+  Future<void> load() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString(_kAccounts);
+    if (raw != null) {
+      try {
+        accounts
+          ..clear()
+          ..addAll((jsonDecode(raw) as List).map((e) => Account.fromJson(Map<String, dynamic>.from(e))));
+      } catch (_) {}
+    }
+    intervalMin = p.getInt(_kInterval) ?? 0;
+    notifyOnNew = p.getBool(_kNotify) ?? true;
+    backgroundEnabled = p.getBool(_kBg) ?? true;
+    for (final a in accounts) {
+      a.status = a.cookies.isNotEmpty ? AccStatus.ok : AccStatus.needsLogin;
+    }
+    notifyListeners();
+    _restartTimer();
+    if (accounts.isNotEmpty) refreshAll(silent: true);
+  }
+
+  Future<void> _save() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_kAccounts, jsonEncode(accounts.map((a) => a.toJson()).toList()));
+  }
+
+  Future<void> setInterval(int m) async {
+    intervalMin = m;
+    (await SharedPreferences.getInstance()).setInt(_kInterval, m);
+    _restartTimer();
+    notifyListeners();
+  }
+
+  Future<void> setNotify(bool v) async {
+    notifyOnNew = v;
+    (await SharedPreferences.getInstance()).setBool(_kNotify, v);
+    notifyListeners();
+  }
+
+  Future<void> setBackground(bool v) async {
+    backgroundEnabled = v;
+    (await SharedPreferences.getInstance()).setBool(_kBg, v);
+    notifyListeners();
+  }
+
+  void _restartTimer() {
+    _timer?.cancel();
+    if (intervalMin > 0) {
+      _timer = Timer.periodic(Duration(minutes: intervalMin), (_) {
+        if (!busy) refreshAll(silent: true);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  // ------------------------------------------------------------- accounts
+  Future<String?> addAccount(String email, String password, {String? name}) async {
+    if (!License.isActive) return 'This device is not activated';
+    if (accounts.length >= License.maxAccounts) {
+      return 'Your license covers ${License.maxAccounts} account(s). '
+          'Remove one, or ask for a key with a higher limit.';
+    }
+    if (accounts.any((a) => a.email.toLowerCase() == email.trim().toLowerCase())) {
+      return 'This email is already added';
+    }
+    final acc = Account(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      email: email.trim(),
+      password: password,
+      name: (name != null && name.trim().isNotEmpty) ? name.trim() : null,
+      autoName: name == null || name.trim().isEmpty,
+    );
+    accounts.add(acc);
+    await _save();
+    notifyListeners();
+    final err = await _loginOne(acc);
+    if (err == null) await _fetchOne(acc, allowRelogin: false);
+    await _save();
+    notifyListeners();
+    return err;
+  }
+
+  Future<void> removeAccount(Account a) async {
+    a.cookies = [];
+    accounts.removeWhere((x) => x.id == a.id);
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> renameAccount(Account a, String name) async {
+    final v = name.trim();
+    if (v.isEmpty) {
+      // Cleared on purpose - fall back to the email prefix and let the next
+      // refresh pick the real name up off the panel again.
+      a.autoName = true;
+      a.name = a.email.split('@').first;
+    } else {
+      a.autoName = false;
+      a.name = v;
+    }
+    await _save();
+    notifyListeners();
+  }
+
+  // --------------------------------------------------------------- actions
+  /// Re-login the given accounts (or all) and fetch their OTPs.
+  Future<void> reloginAll(List<Account> targets) async {
+    if (busy) return;
+    busy = true;
+    busyLabel = 'Logging in…';
+    notifyListeners();
+    await _parallel(targets, (a) async {
+      final err = await _loginOne(a);
+      if (err == null) await _fetchOne(a, allowRelogin: false);
+    });
+    await _save();
+    busy = false;
+    busyLabel = null;
+    notifyListeners();
+  }
+
+  /// Fetch OTPs for every account (auto re-login if the session died).
+  /// Fetches every account once. Waits briefly if a pass is already running,
+  /// so a tap right after opening the app isn't silently swallowed.
+  Future<void> refreshAll({bool silent = false}) async {
+    if (accounts.isEmpty) return;
+    for (var i = 0; i < 60 && busy; i++) {
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+    if (busy) return;
+    busy = true;
+    busyLabel = 'Refreshing…';
+    if (!silent) notifyListeners();
+    final before = {for (final a in accounts) a.id: a.otps.map((o) => o.key).toSet()};
+    try {
+      await _parallel(List.of(accounts), (a) => _fetchOne(a));
+      await _save();
+    } finally {
+      busy = false;
+      busyLabel = null;
+      _settleStuck();
+      notifyListeners();
+    }
+    if (notifyOnNew) _notifyNew(before);
+  }
+
+  /// Nothing should be left spinning once a pass is over.
+  void _settleStuck() {
+    for (final a in accounts) {
+      if (a.status == AccStatus.working) {
+        a.status = a.otps.isNotEmpty ? AccStatus.ok : AccStatus.error;
+        a.lastError ??= 'Timed out - tap refresh to try again';
+      }
+    }
+  }
+
+  Future<void> refreshOne(Account a) async {
+    // Wait for an in-flight sweep instead of silently doing nothing - a tap
+    // that appears to do nothing is worse than a short wait.
+    for (var i = 0; i < 60 && busy; i++) {
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+    if (busy) return;
+    busy = true;
+    busyLabel = 'Refreshing ${a.name}…';
+    notifyListeners();
+    final before = {a.id: a.otps.map((o) => o.key).toSet()};
+    try {
+      await _fetchOne(a);
+      await _save();
+    } finally {
+      busy = false;
+      busyLabel = null;
+      _settleStuck();
+      notifyListeners();
+    }
+    if (notifyOnNew) _notifyNew(before);
+  }
+
+  /// Runs [fn] over [items] with a small concurrency window — this is what
+  /// makes a 5-account refresh finish in a couple of seconds.
+  Future<void> _parallel(List<Account> items, Future<void> Function(Account) fn, {int width = 4}) async {
+    final queue = List.of(items);
+    Future<void> worker() async {
+      while (queue.isNotEmpty) {
+        final a = queue.removeAt(0);
+        try {
+          await fn(a);
+        } catch (e) {
+          a.lastError = e.toString().replaceFirst('Exception: ', '');
+        } finally {
+          // A row stuck on "working" spins forever; make sure it always lands.
+          if (a.status == AccStatus.working) {
+            a.status = a.lastError == null ? AccStatus.ok : AccStatus.error;
+          }
+        }
+        notifyListeners();
+      }
+    }
+    await Future.wait(List.generate(width.clamp(1, 6), (_) => worker()));
+  }
+
+  Future<String?> _loginOne(Account a) async {
+    a.status = AccStatus.working;
+    a.lastError = null;
+    notifyListeners();
+    try {
+      // Plain HTTP gets a 403 from Meesho's edge, so the login runs in a real
+      // WebView. It also hands back the identifier from the panel URL.
+      final r = await WebSession.login(email: a.email, password: a.password);
+      a.cookies = r.cookies;
+      if (r.identifier.isNotEmpty) a.identifier = r.identifier;
+      if (r.storeName.isNotEmpty && a.autoName) a.name = r.storeName;
+      a.lastLogin = DateTime.now().millisecondsSinceEpoch;
+      a.status = AccStatus.ok;
+      return null;
+    } catch (e) {
+      a.status = AccStatus.error;
+      a.lastError = e.toString().replaceFirst('Exception: ', '');
+      return a.lastError;
+    }
+  }
+
+  Future<void> _fetchOne(Account a, {bool allowRelogin = true}) {
+    // A hung WebView used to leave the account spinning forever and, because
+    // the shared lock never released, block every other account too.
+    return _fetchOneInner(a, allowRelogin: allowRelogin)
+        .timeout(const Duration(seconds: 75), onTimeout: () {
+      a.status = AccStatus.error;
+      a.lastError = 'Timed out - tap refresh to try again';
+    });
+  }
+
+  Future<void> _fetchOneInner(Account a, {bool allowRelogin = true}) async {
+    a.status = AccStatus.working;
+    notifyListeners();
+    try {
+      if (a.cookies.isEmpty) throw SessionExpired();
+
+      // Older builds could save junk like "..." as the store name.
+      if (a.autoName && !WebSession.looksLikeStoreName(a.name)) {
+        a.name = a.email.split('@').first;
+      }
+
+      // Meesho answers 403 / errorCode 1001 without the identifier. Accounts
+      // saved before we started capturing it get it recovered here.
+      if (a.identifier.isEmpty) {
+        a.identifier = await WebSession.discoverIdentifier(a.cookies);
+        if (a.identifier.isEmpty) throw SessionExpired();
+      }
+
+      // The panel sends exactly this body, so we send the same. Guessing at it
+      // earlier is what produced the 500s.
+      dynamic data;
+      var gotFromApi = false;
+      var pageReady = false;
+
+      if (!apiBlocked && a.supplierId.isNotEmpty) {
+        try {
+          data = await WebSession.apiCall(
+            a.cookies,
+            '/api/fulfillment/returnRto/fetchDeliveryOTPs',
+            identifier: a.identifier,
+            body: {
+              'supplier_id': int.tryParse(a.supplierId) ?? a.supplierId,
+              'identifier': a.identifier,
+              'child_supplier_identifier': null,
+              'child_supplier_id': null,
+            },
+            onCookies: (c) {
+              if (c.isNotEmpty) a.cookies = c;
+            },
+          );
+          gotFromApi = true;
+        } on SessionExpired {
+          rethrow;
+        } catch (_) {
+          // Only fall back for good: a one-off hiccup shouldn't cost every
+          // later refresh the slow page load.
+          final d = WebSession.lastDebug ?? '';
+          apiBlocked = d.contains('Access Denied') || d.contains('HTTP 403');
+        }
+      }
+
+      if (!gotFromApi) {
+        // First run for this account, or the API is being refused: open the
+        // Returns page. That pass also hands back the supplier id and store
+        // name, so the next refresh can take the quick route.
+        final panel = await WebSession.fetchOtpsViaPanel(
+          a.cookies,
+          a.identifier,
+          onCookies: (c) {
+            if (c.isNotEmpty) a.cookies = c;
+          },
+        );
+        data = panel.otpData;
+        pageReady = panel.pageReady;
+        if (panel.supplierId.isNotEmpty) a.supplierId = panel.supplierId;
+        if (panel.storeName.isNotEmpty && a.autoName) a.name = panel.storeName;
+      }
+
+      a.otps = MeeshoApi.parseOtps(data);
+      a.fetchedAt = DateTime.now().millisecondsSinceEpoch;
+      a.status = AccStatus.ok;
+      // An empty list from a page that rendered fine just means nothing is
+      // pending right now — that is an answer, not a failure.
+      a.lastError = null;
+      if (a.otps.isEmpty && !gotFromApi && !pageReady) {
+        MeeshoApi.lastRawResponse = WebSession.lastDebug;
+        a.lastError = 'Could not read the Returns page - see Settings, Session diagnostics';
+      }
+
+      if (a.autoName && a.name.contains('@')) {
+        unawaited(_fetchDetails(a));
+      }
+    } on SessionExpired {
+      if (allowRelogin) {
+        final err = await _loginOne(a);
+        if (err == null) {
+          // Inner, not the wrapper - the outer timeout already covers this.
+          await _fetchOneInner(a, allowRelogin: false);
+          return;
+        }
+        a.status = AccStatus.needsLogin;
+      } else {
+        a.status = AccStatus.needsLogin;
+        a.lastError = 'Session expired - tap relogin';
+      }
+    } catch (e) {
+      a.status = AccStatus.error;
+      a.lastError = e.toString().replaceFirst('Exception: ', '');
+    }
+  }
+
+  /// Store name and supplier id — nice to have, never fatal.
+  Future<void> _fetchDetails(Account a) async {
+    try {
+      final d = await WebSession.apiCall(
+        a.cookies,
+        '/api/container/supplier/getSupplierDetails',
+        identifier: a.identifier,
+      );
+      final id = MeeshoApi.digInto(d, const ['supplier_id', 'supplierId', 'id']);
+      final nm = MeeshoApi.digInto(d, const [
+        'name', 'supplier_name', 'business_name', 'shop_name', 'display_name', 'store_name',
+      ]);
+      if (id != null && id.isNotEmpty) a.supplierId = id;
+      if (nm != null && nm.isNotEmpty && a.autoName) a.name = nm;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  void _notifyNew(Map<String, Set<String>> before) {
+    for (final a in accounts) {
+      final old = before[a.id] ?? {};
+      final fresh = a.otps.where((o) => !old.contains(o.key)).toList();
+      for (final o in fresh) {
+        Notifier.show(
+          title: '${o.carrier} · ${o.otp}',
+          body: '${a.name} · ${o.count} parcel(s) ready for handover',
+        );
+      }
+    }
+  }
+
+  // --------------------------------------------------------------- getters
+  int get totalReturns => accounts.fold(0, (s, a) => s + a.totalReturns);
+  int get totalOtps => accounts.fold(0, (s, a) => s + a.otps.length);
+
+  List<CarrierGroup> get byCarrier {
+    final map = <String, CarrierGroup>{};
+    for (final a in accounts) {
+      for (final o in a.otps) {
+        final g = map.putIfAbsent(o.carrier, () => CarrierGroup(o.carrier));
+        g.total += o.count;
+        g.rows.add(CarrierRow(
+          accountId: a.id, accountName: a.name, otp: o.otp, count: o.count, time: o.time,
+        ));
+      }
+    }
+    final list = map.values.toList()..sort((x, y) => y.total.compareTo(x.total));
+    for (final g in list) { g.rows.sort((x, y) => y.count.compareTo(x.count)); }
+    return list;
+  }
+}
