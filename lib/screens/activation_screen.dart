@@ -40,11 +40,14 @@ class _ActivationScreenState extends State<ActivationScreen> {
     if (result.ok) widget.onActivated();
   }
 
-  Future<void> _copyDeviceId() async {
-    await Clipboard.setData(ClipboardData(text: License.deviceId));
+  Future<void> _copyRequest() async {
+    await Clipboard.setData(ClipboardData(text: License.requestCode));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Device ID copied'), margin: EdgeInsets.all(14)),
+      const SnackBar(
+        content: Text('Request code copied - send it to get your key'),
+        margin: EdgeInsets.all(14),
+      ),
     );
   }
 
@@ -73,42 +76,63 @@ class _ActivationScreenState extends State<ActivationScreen> {
                           style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
                       const SizedBox(height: 6),
                       const Text(
-                        'Send your Device ID to get a license key. Each key works on one '
-                        'device only and sets how many seller accounts you can add.',
+                        'Copy the request code below and send it over. You will get back a key '
+                        'that works only on this phone and allows an agreed number of seller '
+                        'accounts.',
                         style: TextStyle(fontSize: 13, color: AppColors.ink2, height: 1.45),
                       ),
                       const SizedBox(height: 18),
-                      const Text('Device ID',
+                      const Text('Step 1 — send this request code',
                           style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: AppColors.ink2)),
                       const SizedBox(height: 6),
-                      InkWell(
-                        onTap: _copyDeviceId,
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-                          decoration: BoxDecoration(
-                            color: AppColors.sky,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: SelectableText(
-                                  License.deviceId,
-                                  style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.navy,
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                        decoration: BoxDecoration(
+                          color: AppColors.sky,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SelectableText(
+                              License.requestCode,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12.5,
+                                height: 1.45,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.navy,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Device: ${License.deviceId}',
+                                    style: const TextStyle(fontSize: 11.5, color: AppColors.ink2),
                                   ),
                                 ),
-                              ),
-                              const Icon(Icons.copy_rounded, size: 17, color: AppColors.blueDeep),
-                            ],
-                          ),
+                                TextButton.icon(
+                                  onPressed: _copyRequest,
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: AppColors.blueDeep,
+                                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                  icon: const Icon(Icons.copy_rounded, size: 16),
+                                  label: const Text('Copy',
+                                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
+                      const SizedBox(height: 16),
+                      const Text('Step 2 — paste the key you get back',
+                          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: AppColors.ink2)),
                       const SizedBox(height: 18),
                       TextField(
                         controller: _ctl,
@@ -116,8 +140,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
                         minLines: 3,
                         style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5),
                         decoration: const InputDecoration(
-                          labelText: 'License key',
-                          hintText: 'Paste the key you were given',
+                          hintText: 'Paste your license key here',
                           alignLabelWithHint: true,
                         ),
                       ),
