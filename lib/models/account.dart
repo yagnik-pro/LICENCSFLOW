@@ -12,6 +12,7 @@ class Account {
   String identifier;
   String token;
   List<Map<String, String>> cookies;
+  Map<String, String> storage;
 
   // runtime / cached
   AccStatus status;
@@ -31,6 +32,7 @@ class Account {
     this.identifier = '',
     this.token = '',
     List<Map<String, String>>? cookies,
+    Map<String, String>? storage,
     this.status = AccStatus.idle,
     this.lastError,
     this.lastLogin,
@@ -39,6 +41,7 @@ class Account {
     this.upcomingPayment,
   })  : name = name ?? email.split('@').first,
         cookies = cookies ?? [],
+        storage = storage ?? {},
         otps = otps ?? [];
 
   int get totalReturns => otps.fold(0, (s, o) => s + o.count);
@@ -53,6 +56,7 @@ class Account {
         'identifier': identifier,
         'token': token,
         'cookies': cookies,
+        'storage': storage,
         'lastLogin': lastLogin,
         'fetchedAt': fetchedAt,
         'otps': otps.map((o) => o.toJson()).toList(),
@@ -71,6 +75,8 @@ class Account {
         cookies: ((j['cookies'] ?? []) as List)
             .map((c) => Map<String, String>.from(c as Map))
             .toList(),
+        storage: Map<String, String>.from(
+            (j['storage'] ?? const <String, String>{}) as Map),
         lastLogin: j['lastLogin'],
         fetchedAt: j['fetchedAt'],
         otps: ((j['otps'] ?? []) as List).map((o) => OtpEntry.fromJson(Map<String, dynamic>.from(o))).toList(),
