@@ -6,6 +6,7 @@ import '../theme.dart';
 import '../services/background.dart';
 import '../services/meesho_api.dart';
 import '../services/web_session.dart';
+import '../services/meesho_http.dart';
 import '../services/license.dart';
 import 'activation_screen.dart';
 import '../widgets/brand.dart';
@@ -192,7 +193,7 @@ class SettingsScreen extends StatelessWidget {
                           title: const Text('Session diagnostics', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
                           subtitle: const Text('What Meesho replied to the last request', style: TextStyle(fontSize: 12.3, color: AppColors.ink2)),
                           trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.ink2),
-                          onTap: () => _showText(context, 'Session diagnostics', WebSession.lastDebug,
+                          onTap: () => _showText(context, 'Session diagnostics', _diagnostics,
                               'Nothing yet in this session.\n\nTap Relogin or Refresh on an account, then come back here.'),
                         ),
                         const Divider(height: 1, color: AppColors.skyLine),
@@ -257,6 +258,15 @@ class SettingsScreen extends StatelessWidget {
         child: Text(t.toUpperCase(),
             style: const TextStyle(fontSize: 11.5, letterSpacing: 1.2, fontWeight: FontWeight.w800, color: AppColors.ink2)),
       );
+
+  /// Both transports keep their own transcript; show whichever ran.
+  String? get _diagnostics {
+    final parts = [MeeshoHttp.lastDebug, WebSession.lastDebug]
+        .whereType<String>()
+        .where((s) => s.trim().isNotEmpty)
+        .toList();
+    return parts.isEmpty ? null : parts.join('\n\n────────\n\n');
+  }
 
   void _showLicenseKey(BuildContext context) => _showText(
         context,
