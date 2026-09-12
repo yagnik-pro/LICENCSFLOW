@@ -7,7 +7,6 @@ import '../models/account.dart';
 import '../models/otp_entry.dart';
 import 'meesho_api.dart';
 import 'web_session.dart';
-import 'meesho_http.dart';
 import 'notifier.dart';
 import 'license.dart';
 
@@ -27,10 +26,6 @@ class AppStore extends ChangeNotifier {
   /// Set once Meesho's WAF starts refusing hand-made API calls. Reset on every
   /// app start, so a change on their side is picked up without a reinstall.
   bool apiBlocked = false;
-
-  /// Set if Meesho starts refusing plain HTTP. Reset on every app start so a
-  /// change on their side is picked up without a reinstall.
-  bool httpBlocked = false;
 
   bool busy = false;
   String? busyLabel;
@@ -247,43 +242,16 @@ class AppStore extends ChangeNotifier {
     await Future.wait(List.generate(width.clamp(1, 6), (_) => worker()));
   }
 
-  /// Signs in. Plain HTTP first — it is a single fast request and needs no
-  /// WebView. The WebView path stays as a fallback for the day Meesho decides
-  /// to refuse HTTP clients again, or asks for a captcha.
+  /// Signs in through a real WebView.
+  ///
+  /// Plain HTTP is not an option: Meesho sits behind Akamai Bot Manager, which
+  /// wants a cookie that only its own JavaScript can produce. No set of headers
+  /// gets a bare HTTP client past it — every attempt comes back as an Akamai
+  /// "Access Denied". A WebView runs that JavaScript, so it is simply allowed.
   Future<String?> _loginOne(Account a) async {
     a.status = AccStatus.working;
     a.lastError = null;
     notifyListeners();
-
-    if (!httpBlocked) {
-      try {
-        final http = await MeeshoHttp.create(const []);
-        final r = await http.login(a.email, a.password);
-        a.cookies = await http.cookies();
-        a.token = r['token'] ?? '';
-        if ((r['identifier'] ?? '').isNotEmpty) a.identifier = r['identifier']!;
-        if ((r['supplierId'] ?? '').isNotEmpty) a.supplierId = r['supplierId']!;
-        final nm = r['storeName'] ?? '';
-        if (nm.isNotEmpty && a.autoName && WebSession.looksLikeStoreName(nm)) {
-          a.name = WebSession.cleanStoreName(nm);
-        }
-        a.lastLogin = DateTime.now().millisecondsSinceEpoch;
-        a.status = AccStatus.ok;
-        return null;
-      } on MeeshoHttpError catch (e) {
-        // Wrong credentials is final; anything else is worth retrying in a
-        // real browser, which Meesho never blocks.
-        if (e.message.toLowerCase().contains('password')) {
-          a.status = AccStatus.error;
-          a.lastError = e.message;
-          return a.lastError;
-        }
-        httpBlocked = true;
-      } catch (_) {
-        httpBlocked = true;
-      }
-    }
-
     try {
       final r = await WebSession.login(email: a.email, password: a.password);
       a.cookies = r.cookies;
@@ -328,26 +296,14 @@ class AppStore extends ChangeNotifier {
         if (a.identifier.isEmpty) throw SessionExpired();
       }
 
-      // Plain HTTP first: one request, about a second. The panel-page route is
-      // the fallback, and it is also what discovers supplier_id the first time.
+      // Requests are made from inside the WebView, so they carry the Akamai
+      // cookie the bot manager insists on. A fetch() is just an XHR — no page
+      // render — so this stays quick.
       dynamic data;
       var gotQuick = false;
       var pageReady = false;
 
-      if (!httpBlocked && a.supplierId.isNotEmpty && a.identifier.isNotEmpty) {
-        try {
-          final http = await MeeshoHttp.create(a.cookies, token: a.token);
-          data = await http.fetchOtps(supplierId: a.supplierId, identifier: a.identifier);
-          a.cookies = await http.cookies();
-          gotQuick = true;
-        } on SessionDead {
-          throw SessionExpired();
-        } catch (_) {
-          httpBlocked = true;
-        }
-      }
-
-      if (!gotQuick && !apiBlocked && a.supplierId.isNotEmpty) {
+      if (!apiBlocked && a.supplierId.isNotEmpty) {
         try {
           data = await WebSession.apiCall(
             a.cookies,
@@ -376,6 +332,9 @@ class AppStore extends ChangeNotifier {
       }
 
       if (!gotQuick) {
+        // First run for this account, or the API refused us: open the Returns
+        // page. That pass also hands back supplier_id and the store name, so
+        // later refreshes can take the quick route.
         final panel = await WebSession.fetchOtpsViaPanel(
           a.cookies,
           a.identifier,
