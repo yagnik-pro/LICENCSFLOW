@@ -140,7 +140,6 @@ class WebSession {
         expiresDate: expires,
       );
     }
-    await _cookieMgr.flush();
   }
 
   // ============================================================ web storage
