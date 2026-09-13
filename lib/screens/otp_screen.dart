@@ -78,7 +78,7 @@ class _OtpScreenState extends State<OtpScreen> {
                                 icon: Icon(Icons.close_rounded, color: Colors.white.withOpacity(.85), size: 19),
                                 onPressed: () { _searchCtl.clear(); setState(() => _q = ''); },
                               ),
-                        hintText: 'Search store or courier',
+                        hintText: 'Search store, number or courier',
                         hintStyle: TextStyle(color: Colors.white.withOpacity(.7), fontSize: 14.5, fontWeight: FontWeight.w500),
                         border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none,
                       ),
@@ -147,7 +147,7 @@ class _OtpScreenState extends State<OtpScreen> {
   }
 
   List<Widget> _accountCards(List<Account> accounts) {
-    final list = accounts.where((a) => _hit([a.name, a.email, a.supplierId, ...a.otps.map((o) => o.carrier)])).toList();
+    final list = accounts.where((a) => _hit([a.name, a.email, a.phone, a.supplierId, ...a.otps.map((o) => o.carrier)])).toList();
     if (list.isEmpty) {
       return [FlowEmpty(icon: Icons.search_off_rounded, title: 'No matches', body: 'Nothing matched "$_q".')];
     }
@@ -163,7 +163,27 @@ class _OtpScreenState extends State<OtpScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(a.name, style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800)),
+                        Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: a.name,
+                                style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800),
+                              ),
+                              if (a.phone.isNotEmpty)
+                                TextSpan(
+                                  text: '  (${a.phone})',
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.ink2,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         const SizedBox(height: 2),
                         Text(
                           [
