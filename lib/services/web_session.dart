@@ -173,12 +173,28 @@ class WebSession {
   /// The panel keeps its supplier record in localStorage, so the numeric id is
   /// sitting right there after login — no extra request, no page load.
   static String supplierIdFromStorage(Map<String, String> storage) {
-    final re = RegExp(r'"supplier_?id"\s*:\s*"?(\d{4,10})"?', caseSensitive: false);
+    final direct = RegExp(r'"supplier_?id"\s*:\s*"?(\d{4,10})"?', caseSensitive: false);
     for (final v in storage.values) {
-      final m = re.firstMatch(v);
+      final m = direct.firstMatch(v);
+      if (m != null) return m.group(1)!;
+    }
+    // Some entries carry it as a plain "id" inside the supplier record.
+    final loose = RegExp(r'"id"\s*:\s*"?(\d{6,9})"?');
+    for (final e in storage.entries) {
+      if (!RegExp(r'supplier|user|auth|profile', caseSensitive: false).hasMatch(e.key)) continue;
+      final m = loose.firstMatch(e.value);
       if (m != null) return m.group(1)!;
     }
     return '';
+  }
+
+  /// Pulls the supplier id out of whatever the panel's own XHRs carried. Those
+  /// requests always include it, which makes this the most dependable source.
+  static String supplierIdFromXhrLog(String log) {
+    final m = RegExp(r'supplier_?id\D{0,6}(\d{4,10})', caseSensitive: false).firstMatch(log);
+    if (m != null) return m.group(1)!;
+    final m2 = RegExp(r'"id\\?"\s*:\s*(\d{6,9})').firstMatch(log);
+    return m2 == null ? '' : m2.group(1)!;
   }
 
   static Future<Map<String, String>> dumpStorage(InAppWebViewController c) async {
@@ -514,7 +530,7 @@ class WebSession {
 (function(){
   if(window.__otpflow) return;
   window.__otpflow = [];
-  function keep(u){ return /fetchDeliveryOTPs|returnRto|fetchOverview/i.test(u || ''); }
+  function keep(u){ return /\/api\//i.test(u || ''); }
 
   var of = window.fetch;
   window.fetch = function(){
@@ -685,10 +701,8 @@ class WebSession {
         var supplierId = '';
         if (hooked != null && '$hooked'.length > 4) {
           log.writeln('  panel XHRs: $hooked');
-          // "supplier_id\":2671903  ->  2671903 (the \": between is just JSON escaping)
-          final m = RegExp(r'supplier_id\D{0,6}(\d{4,10})').firstMatch('$hooked');
-          if (m != null) {
-            supplierId = m.group(1)!;
+          supplierId = supplierIdFromXhrLog('$hooked');
+          if (supplierId.isNotEmpty) {
             log.writeln('  supplier_id from panel: $supplierId');
           }
         }
@@ -755,6 +769,11 @@ class WebSession {
         thirdPartyCookiesEnabled: true,
         userAgent: ua,
       ),
+      // Same hook as the Returns page: the panel's own calls carry the supplier
+      // id, which is far more dependable than digging through localStorage.
+      initialUserScripts: UnmodifiableListView<UserScript>([
+        UserScript(source: _hookJs, injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START),
+      ]),
       onWebViewCreated: (c) => ctl = c,
       onLoadStop: (c, url) {
         log.writeln('loaded $url');
@@ -788,7 +807,15 @@ class WebSession {
           }
 
           final storage = await dumpStorage(c);
-          final sid = supplierIdFromStorage(storage);
+          var sid = supplierIdFromStorage(storage);
+          if (sid.isEmpty) {
+            // Give the panel a moment to make its first calls, then read them.
+            await Future.delayed(const Duration(milliseconds: 1500));
+            final hooked = await c.evaluateJavascript(
+                source: "JSON.stringify((window.__otpflow || [])"
+                    ".map(function(e){return (e.req||'') + (e.url||'');}))");
+            sid = supplierIdFromXhrLog('${hooked ?? ''}');
+          }
           log.writeln('landed on $url with ${cookies.length} cookie(s), '
               '${storage.length} storage item(s), identifier=$ident, supplier_id='
               '${sid.isEmpty ? "(not found)" : sid}');
