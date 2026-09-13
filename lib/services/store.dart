@@ -6,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/account.dart';
 import 'meesho_api.dart';
 import 'web_session.dart';
-import 'meesho_http.dart';
 import 'notifier.dart';
 import 'license.dart';
 
@@ -246,43 +245,16 @@ class AppStore extends ChangeNotifier {
     await Future.wait(List.generate(width.clamp(1, 6), (_) => worker()));
   }
 
-  /// Signs in.
+  /// Signs in through a real WebView.
   ///
-  /// Plain HTTP first — one request, about a second. It works because the
-  /// client fetches the panel's login page before calling the API, which is
-  /// where Meesho's edge hands out the session cookie it then insists on.
-  /// The WebView is kept as a fallback for a captcha or an SMS-OTP step.
+  /// Plain HTTP was tried and does not work: Meesho's edge answers even a
+  /// simple GET of the login page with "Access Denied" and no cookies, so
+  /// there is nothing a set of headers can fix. Attempting it first only added
+  /// three wasted requests to every login.
   Future<String?> _loginOne(Account a) async {
     a.status = AccStatus.working;
     a.lastError = null;
     notifyListeners();
-
-    try {
-      final http = await MeeshoHttp.create(const []);
-      final r = await http.login(a.email, a.password);
-      a.cookies = await http.cookies();
-      a.token = r['token'] ?? '';
-      if ((r['identifier'] ?? '').isNotEmpty) a.identifier = r['identifier']!;
-      if ((r['supplierId'] ?? '').isNotEmpty) a.supplierId = r['supplierId']!;
-      final nm = r['storeName'] ?? '';
-      if (nm.isNotEmpty && a.autoName && WebSession.looksLikeStoreName(nm)) {
-        a.name = WebSession.cleanStoreName(nm);
-      }
-      a.lastLogin = DateTime.now().millisecondsSinceEpoch;
-      a.apiFailures = 0;
-      a.status = AccStatus.ok;
-      return null;
-    } on MeeshoHttpError catch (e) {
-      // Bad credentials are final; anything else is worth one try in a browser.
-      if (e.message.toLowerCase().contains('password')) {
-        a.status = AccStatus.error;
-        a.lastError = e.message;
-        return a.lastError;
-      }
-    } catch (_) {
-      // fall through to the WebView
-    }
-
     try {
       final r = await WebSession.login(email: a.email, password: a.password);
       a.cookies = r.cookies;
@@ -349,26 +321,7 @@ class AppStore extends ChangeNotifier {
       // for it, so stop paying for the attempt. It is per account on purpose:
       // one account having a bad moment used to push every other account onto
       // the slow page route.
-      // Quickest route: straight HTTP.
-      if (a.apiFailures < 3 && a.supplierId.isNotEmpty && a.identifier.isNotEmpty) {
-        try {
-          final http = await MeeshoHttp.create(
-            a.cookies,
-            token: a.token,
-            identifier: a.identifier,
-          );
-          data = await http.fetchOtps(supplierId: a.supplierId, identifier: a.identifier);
-          a.cookies = await http.cookies();
-          gotQuick = true;
-          a.apiFailures = 0;
-        } on SessionDead {
-          throw SessionExpired();
-        } catch (_) {
-          // fall through to the WebView call below
-        }
-      }
-
-      if (!gotQuick && a.apiFailures < 3 && a.supplierId.isNotEmpty) {
+      if (a.apiFailures < 3 && a.supplierId.isNotEmpty) {
         try {
           data = await WebSession.apiCall(
             a.cookies,
