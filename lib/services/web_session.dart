@@ -25,12 +25,16 @@ class LoginResult {
   /// open the Returns page just to learn it.
   final String supplierId;
 
+  /// Registered mobile, shown next to the store name.
+  final String phone;
+
   const LoginResult({
     required this.cookies,
     required this.identifier,
     this.storeName = '',
     this.storage = const {},
     this.supplierId = '',
+    this.phone = '',
   });
 }
 
@@ -184,6 +188,24 @@ class WebSession {
       if (!RegExp(r'supplier|user|auth|profile', caseSensitive: false).hasMatch(e.key)) continue;
       final m = loose.firstMatch(e.value);
       if (m != null) return m.group(1)!;
+    }
+    return '';
+  }
+
+  /// Finds the registered mobile in whatever the panel saved or sent. Indian
+  /// numbers are ten digits starting 6-9; anything else is ignored so a random
+  /// id never ends up displayed as a phone number.
+  static String phoneFrom(String text) {
+    final keyed = RegExp(r'"(?:phone|mobile|phone_number|mobile_number)"\s*:\s*"?(\+?91)?([6-9]\d{9})',
+            caseSensitive: false)
+        .firstMatch(text);
+    return keyed == null ? '' : keyed.group(2)!;
+  }
+
+  static String phoneFromStorage(Map<String, String> storage) {
+    for (final v in storage.values) {
+      final p = phoneFrom(v);
+      if (p.isNotEmpty) return p;
     }
     return '';
   }
@@ -807,6 +829,7 @@ class WebSession {
           }
 
           final storage = await dumpStorage(c);
+          final phone = phoneFromStorage(storage);
           var sid = supplierIdFromStorage(storage);
           if (sid.isEmpty) {
             // Give the panel a moment to make its first calls, then read them.
@@ -827,6 +850,7 @@ class WebSession {
             storeName: name,
             storage: storage,
             supplierId: sid,
+            phone: phone,
           );
         }
 
