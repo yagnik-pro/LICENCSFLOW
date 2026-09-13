@@ -16,6 +16,7 @@ class AppStore extends ChangeNotifier {
   static const _kInterval = 'otpflow.intervalMin';
   static const _kNotify = 'otpflow.notify';
   static const _kBg = 'otpflow.background';
+  static const _kClientType = 'otpflow.clientType';
 
   final List<Account> accounts = [];
   /// 0 = only when the app opens or you tap refresh.
@@ -45,6 +46,8 @@ class AppStore extends ChangeNotifier {
     intervalMin = p.getInt(_kInterval) ?? 0;
     notifyOnNew = p.getBool(_kNotify) ?? true;
     backgroundEnabled = p.getBool(_kBg) ?? true;
+    final ct = p.getString(_kClientType);
+    if (ct != null && ct.isNotEmpty) WebSession.goodClientType = ct;
     for (final a in accounts) {
       // Saved OTPs are shown straight away; the silent refresh below only
       // updates them.
@@ -62,6 +65,7 @@ class AppStore extends ChangeNotifier {
   Future<void> _save() async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_kAccounts, jsonEncode(accounts.map((a) => a.toJson()).toList()));
+    await p.setString(_kClientType, WebSession.goodClientType);
   }
 
   Future<void> setInterval(int m) async {
@@ -306,6 +310,12 @@ class AppStore extends ChangeNotifier {
       var gotQuick = false;
       var pageReady = false;
 
+      // supplier_id is what unlocks the one-request path. Ask the API for it
+      // first; only if that fails do we open the Returns page to find it.
+      if (a.supplierId.isEmpty && !apiBlocked) {
+        await _fetchDetails(a);
+      }
+
       if (!apiBlocked && a.supplierId.isNotEmpty) {
         try {
           data = await WebSession.apiCall(
@@ -393,15 +403,27 @@ class AppStore extends ChangeNotifier {
         '/api/container/supplier/getSupplierDetails',
         identifier: a.identifier,
         storage: a.storage,
+        onCookies: (c) {
+          if (c.isNotEmpty) a.cookies = c;
+        },
       );
-      final id = MeeshoApi.digInto(d, const ['supplier_id', 'supplierId', 'id']);
+
+      // Only take a plain numeric id — a bare "id" key can belong to anything
+      // in the response.
+      final id = MeeshoApi.digInto(d, const ['supplier_id', 'supplierId']) ??
+          MeeshoApi.digInto(d, const ['id']);
+      if (id != null && RegExp(r'^\d{4,10}$').hasMatch(id)) a.supplierId = id;
+
       final nm = MeeshoApi.digInto(d, const [
-        'name', 'supplier_name', 'business_name', 'shop_name', 'display_name', 'store_name',
+        'supplier_name', 'business_name', 'shop_name', 'store_name', 'display_name', 'name',
       ]);
-      if (id != null && id.isNotEmpty) a.supplierId = id;
-      if (nm != null && nm.isNotEmpty && a.autoName) a.name = nm;
+      if (nm != null && a.autoName && WebSession.looksLikeStoreName(nm)) {
+        a.name = WebSession.cleanStoreName(nm);
+      }
       notifyListeners();
-    } catch (_) {}
+    } catch (_) {
+      // The page fallback will pick these up instead.
+    }
   }
 
   void _notifyNew(Map<String, Set<String>> before) {
