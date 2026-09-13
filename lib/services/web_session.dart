@@ -21,11 +21,16 @@ class LoginResult {
   /// localStorage from the panel, saved alongside the cookies.
   final Map<String, String> storage;
 
+  /// Numeric supplier id. Having it from login means no account ever has to
+  /// open the Returns page just to learn it.
+  final String supplierId;
+
   const LoginResult({
     required this.cookies,
     required this.identifier,
     this.storeName = '',
     this.storage = const {},
+    this.supplierId = '',
   });
 }
 
@@ -97,6 +102,12 @@ class WebSession {
   }
 
   static Map<String, String> _pendingStorage = const {};
+
+  /// Which account's cookies the shared document currently belongs to. Swapping
+  /// cookies under an existing document leaves fetch() failing outright, so the
+  /// page is reloaded whenever the account changes.
+  static String _documentOwner = '';
+  static Completer<void>? _loadDone;
   static HeadlessInAppWebView? _headless;
   static InAppWebViewController? _ctl;
 
@@ -158,6 +169,17 @@ class WebSession {
   return JSON.stringify(out);
 }catch(e){ return '{}'; }})();
 ''';
+
+  /// The panel keeps its supplier record in localStorage, so the numeric id is
+  /// sitting right there after login — no extra request, no page load.
+  static String supplierIdFromStorage(Map<String, String> storage) {
+    final re = RegExp(r'"supplier_?id"\s*:\s*"?(\d{4,10})"?', caseSensitive: false);
+    for (final v in storage.values) {
+      final m = re.firstMatch(v);
+      if (m != null) return m.group(1)!;
+    }
+    return '';
+  }
 
   static Future<Map<String, String>> dumpStorage(InAppWebViewController c) async {
     try {
@@ -238,6 +260,8 @@ class WebSession {
       onWebViewCreated: (c) => _ctl = c,
       onLoadStop: (c, url) {
         if (!ready.isCompleted) ready.complete(c);
+        final d = _loadDone;
+        if (d != null && !d.isCompleted) d.complete();
       },
     );
     await _headless!.run();
@@ -245,6 +269,18 @@ class WebSession {
       const Duration(seconds: 30),
       onTimeout: () => _ctl ?? (throw Exception('WebView did not start')),
     );
+  }
+
+  /// Reloads the shared document and waits for it to settle, instead of
+  /// sleeping for a guessed amount of time.
+  static Future<void> _reload(InAppWebViewController c, String url) async {
+    _loadDone = Completer<void>();
+    await c.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    await _loadDone!.future.timeout(
+      const Duration(seconds: 20),
+      onTimeout: () {},
+    );
+    await Future.delayed(const Duration(milliseconds: 400));
   }
 
   // ================================================================ API call
@@ -273,11 +309,13 @@ class WebSession {
       await _installCookies(cookies);
       final c = await _ensureHeadless();
 
-      // fetch() must run from a document on the Meesho origin.
+      // fetch() must run from a document on the Meesho origin, and that
+      // document has to belong to this account.
+      final owner = cookies.isEmpty ? '' : '${cookies.first['value']}';
       final current = (await c.getUrl())?.toString() ?? '';
-      if (!current.startsWith(base)) {
-        await c.loadUrl(urlRequest: URLRequest(url: WebUri(loginUrl)));
-        await Future.delayed(const Duration(milliseconds: 1000));
+      if (!current.startsWith(base) || owner != _documentOwner) {
+        await _reload(c, loginUrl);
+        _documentOwner = owner;
       }
       await installStorage(c, storage);
 
@@ -299,43 +337,57 @@ class WebSession {
         };
         for (final pl in payloads.entries) {
           final js = _fetchJs(path, pl.value, ct, identifier);
-          final raw = await c
-              .callAsyncJavaScript(functionBody: js)
-              .timeout(const Duration(seconds: 20), onTimeout: () => null);
-          final value = raw?.value;
-          if (value == null) {
-            final err = raw?.error;
-            final extra = err == null ? '' : ' (bridge error: $err)';
-            log.writeln('  POST ${pl.key} ct=$ct -> no value from JS$extra');
-            continue;
-          }
-          Map<String, dynamic> env;
-          try {
-            env = jsonDecode('$value') as Map<String, dynamic>;
-          } catch (_) {
-            log.writeln('  POST ${pl.key} ct=$ct -> unreadable: $value');
-            continue;
-          }
-          final status = env['status'];
-          final text = '${env['body'] ?? ''}';
-          final len = env['len'] ?? text.length;
-          final short = text.length > 500 ? '${text.substring(0, 500)}...' : text;
-          log.writeln('  POST ${pl.key} ct=$ct -> HTTP $status  [$len bytes]  $short');
 
-          final rejectedType = status == 400 && text.contains('client type');
-          // Anything other than "Invalid client type" means the server accepted
-          // this value, so stop cycling through the rest on later calls.
-          if (!rejectedType && status != -1) goodClientType = ct;
-
-          if (status == 200) {
-            try {
-              good = jsonDecode(text);
-            } catch (_) {
-              good = text;
+          // A JS-level "Failed to fetch" means the document went stale, not
+          // that the client-type is wrong — reload once and try the same
+          // values again rather than burning requests on other types.
+          for (var attempt = 0; attempt < 2; attempt++) {
+            if (attempt == 1) {
+              log.writeln('  reloading the page and retrying');
+              await _reload(c, loginUrl);
+              await installStorage(c, storage);
             }
-            break outer;
+
+            final raw = await c
+                .callAsyncJavaScript(functionBody: js)
+                .timeout(const Duration(seconds: 20), onTimeout: () => null);
+            final value = raw?.value;
+            if (value == null) {
+              log.writeln('  POST ${pl.key} ct=$ct -> no value from JS');
+              continue;
+            }
+            Map<String, dynamic> env;
+            try {
+              env = jsonDecode('$value') as Map<String, dynamic>;
+            } catch (_) {
+              log.writeln('  POST ${pl.key} ct=$ct -> unreadable: $value');
+              continue;
+            }
+            final status = env['status'];
+            final text = '${env['body'] ?? ''}';
+            final len = env['len'] ?? text.length;
+            final short = text.length > 400 ? '${text.substring(0, 400)}...' : text;
+            log.writeln('  POST ${pl.key} ct=$ct -> HTTP $status  [$len bytes]  $short');
+
+            if (status == 200) {
+              goodClientType = ct;
+              try {
+                good = jsonDecode(text);
+              } catch (_) {
+                good = text;
+              }
+              break outer;
+            }
+
+            // Stale document: worth one reload, then give up on this pass.
+            if (status == -1) continue;
+
+            // "Invalid client type" is the only reason to try another value.
+            if (status == 400 && text.contains('client type')) continue outer;
+
+            // Any other status is a real answer - no point retrying.
+            break;
           }
-          if (rejectedType) continue outer;
         }
       }
 
@@ -736,8 +788,10 @@ class WebSession {
           }
 
           final storage = await dumpStorage(c);
+          final sid = supplierIdFromStorage(storage);
           log.writeln('landed on $url with ${cookies.length} cookie(s), '
-              '${storage.length} storage item(s), identifier=$ident');
+              '${storage.length} storage item(s), identifier=$ident, supplier_id='
+              '${sid.isEmpty ? "(not found)" : sid}');
           _record(log.toString());
           if (cookies.isEmpty) throw Exception('Logged in but no cookies were set');
           return LoginResult(
@@ -745,6 +799,7 @@ class WebSession {
             identifier: ident,
             storeName: name,
             storage: storage,
+            supplierId: sid,
           );
         }
 
