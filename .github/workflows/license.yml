@@ -18,8 +18,8 @@ on:
         default: 'sign'
         type: choice
         options: [sign, genkeys]
-      request:
-        description: 'Request code the customer copied from the app'
+      device:
+        description: 'Device ID the customer copied from the app (android_xxxxxxxxxx-xxxx)'
         required: false
       accounts:
         description: 'How many seller accounts this key allows'
@@ -80,12 +80,12 @@ jobs:
             echo "::error::LICENSE_PRIVATE_KEY secret is not set. Run this workflow with mode=genkeys first."
             exit 1
           fi
-          if [ -z "${{ inputs.request }}" ]; then
-            echo "::error::Request code is required when mode=sign."
+          if [ -z "${{ inputs.device }}" ]; then
+            echo "::error::Device ID is required when mode=sign."
             exit 1
           fi
           dart run tool/keygen.dart sign \
-            --request "${{ inputs.request }}" \
+            --device "${{ inputs.device }}" \
             --accounts "${{ inputs.accounts }}" \
             --days "${{ inputs.days }}" | tee out.txt
           {
