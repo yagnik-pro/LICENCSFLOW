@@ -252,8 +252,11 @@ class WebSession {
   /// `400 {"message":"Bad Request. Invalid client type."}`.
   static const _clientTypes = ['web', 'supplier-web', 'supplier', 'android'];
 
-  /// Remembered once we learn which value works, so later calls are one shot.
-  static String? goodClientType;
+  /// 'web' is what the panel sends and what Meesho accepts; starting from a
+  /// known-good value turns a refresh into one request instead of cycling
+  /// through every candidate. If Meesho ever changes it, the loop below still
+  /// finds the new one and remembers it.
+  static String goodClientType = 'web';
 
   /// Calls a Meesho API path from inside the hidden WebView with [cookies]
   /// installed, and returns the first decoded body that comes back 200.
@@ -274,12 +277,12 @@ class WebSession {
       final current = (await c.getUrl())?.toString() ?? '';
       if (!current.startsWith(base)) {
         await c.loadUrl(urlRequest: URLRequest(url: WebUri(loginUrl)));
-        await Future.delayed(const Duration(milliseconds: 1800));
+        await Future.delayed(const Duration(milliseconds: 1000));
       }
       await installStorage(c, storage);
 
       final types = <String>[
-        if (goodClientType != null) goodClientType!,
+        goodClientType,
         ..._clientTypes.where((t) => t != goodClientType),
       ];
 
@@ -292,11 +295,13 @@ class WebSession {
       for (final ct in types) {
         final payloads = <String, String>{
           if (body != null) 'body': jsonEncode(body),
-          'empty': '{}',
+          if (body == null) 'empty': '{}',
         };
         for (final pl in payloads.entries) {
           final js = _fetchJs(path, pl.value, ct, identifier);
-          final raw = await c.callAsyncJavaScript(functionBody: js);
+          final raw = await c
+              .callAsyncJavaScript(functionBody: js)
+              .timeout(const Duration(seconds: 20), onTimeout: () => null);
           final value = raw?.value;
           if (value == null) {
             final err = raw?.error;
