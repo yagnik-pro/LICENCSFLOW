@@ -9,6 +9,9 @@ class Account {
   String name;          // shown in lists
   bool autoName;        // name came from Meesho, overwrite on refresh
   String supplierId;
+
+  /// Registered mobile, shown beside the store name the way the panel does.
+  String phone;
   String identifier;
 
   /// Consecutive quick-route failures. A few in a row and this account falls
@@ -33,6 +36,7 @@ class Account {
     String? name,
     this.autoName = true,
     this.supplierId = '',
+    this.phone = '',
     this.identifier = '',
     this.apiFailures = 0,
     this.token = '',
@@ -58,6 +62,7 @@ class Account {
         'name': name,
         'autoName': autoName,
         'supplierId': supplierId,
+        'phone': phone,
         'identifier': identifier,
         'token': token,
         'cookies': cookies,
@@ -75,6 +80,7 @@ class Account {
         name: j['name'],
         autoName: j['autoName'] ?? true,
         supplierId: j['supplierId'] ?? '',
+        phone: j['phone'] ?? '',
         identifier: j['identifier'] ?? '',
         token: j['token'] ?? '',
         cookies: ((j['cookies'] ?? []) as List)
