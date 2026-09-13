@@ -53,7 +53,10 @@ class AppStore extends ChangeNotifier {
     }
     notifyListeners();
     _restartTimer();
-    if (accounts.isNotEmpty) refreshAll(silent: true);
+    if (accounts.isNotEmpty) {
+      unawaited(WebSession.warmUp());
+      refreshAll(silent: true);
+    }
   }
 
   Future<void> _save() async {
