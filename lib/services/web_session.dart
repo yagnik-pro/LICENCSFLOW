@@ -215,6 +215,15 @@ class WebSession {
     });
   }
 
+  /// Spins the hidden WebView up ahead of time. Creating it costs a second or
+  /// two; doing that at app start means the first refresh is as quick as the
+  /// ones after it.
+  static Future<void> warmUp() async {
+    try {
+      await _ensureHeadless();
+    } catch (_) {}
+  }
+
   // ======================================================= headless instance
   static Future<InAppWebViewController> _ensureHeadless() async {
     if (_ctl != null) return _ctl!;
