@@ -261,6 +261,7 @@ class AppStore extends ChangeNotifier {
       if (r.identifier.isNotEmpty) a.identifier = r.identifier;
       if (r.storage.isNotEmpty) a.storage = r.storage;
       if (r.supplierId.isNotEmpty) a.supplierId = r.supplierId;
+      if (r.phone.isNotEmpty) a.phone = r.phone;
       if (r.storeName.isNotEmpty && a.autoName) a.name = r.storeName;
       a.lastLogin = DateTime.now().millisecondsSinceEpoch;
       a.apiFailures = 0;
@@ -312,6 +313,9 @@ class AppStore extends ChangeNotifier {
       // in the storage we already saved at login; only ask the API if it isn't.
       if (a.supplierId.isEmpty) {
         a.supplierId = WebSession.supplierIdFromStorage(a.storage);
+      }
+      if (a.phone.isEmpty) {
+        a.phone = WebSession.phoneFromStorage(a.storage);
       }
       if (a.supplierId.isEmpty && a.apiFailures < 3) {
         await _fetchDetails(a);
@@ -425,6 +429,13 @@ class AppStore extends ChangeNotifier {
       ]);
       if (nm != null && a.autoName && WebSession.looksLikeStoreName(nm)) {
         a.name = WebSession.cleanStoreName(nm);
+      }
+
+      if (a.phone.isEmpty) {
+        final ph = MeeshoApi.digInto(d, const ['phone', 'mobile', 'phone_number', 'mobile_number']);
+        if (ph != null && RegExp(r'^[6-9]\d{9}$').hasMatch(ph.replaceAll(RegExp(r'\D'), '').replaceFirst(RegExp(r'^91'), ''))) {
+          a.phone = ph.replaceAll(RegExp(r'\D'), '').replaceFirst(RegExp(r'^91'), '');
+        }
       }
       notifyListeners();
     } catch (_) {
