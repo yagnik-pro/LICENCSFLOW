@@ -54,12 +54,12 @@ class _ActivationScreenState extends State<ActivationScreen> {
     );
   }
 
-  Future<void> _copyRequest() async {
-    await Clipboard.setData(ClipboardData(text: License.requestCode));
+  Future<void> _copyDeviceId() async {
+    await Clipboard.setData(ClipboardData(text: License.deviceId));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Request code copied - send it to get your key'),
+        content: Text('Device ID copied - send it to get your key'),
         margin: EdgeInsets.all(14),
       ),
     );
@@ -90,13 +90,12 @@ class _ActivationScreenState extends State<ActivationScreen> {
                           style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
                       const SizedBox(height: 6),
                       const Text(
-                        'Copy the request code below and send it over. You will get back a key '
-                        'that works only on this phone and allows an agreed number of seller '
-                        'accounts.',
+                        'Send the Device ID below. You will get back a key that works only on '
+                        'this phone and allows an agreed number of seller accounts.',
                         style: TextStyle(fontSize: 13, color: AppColors.ink2, height: 1.45),
                       ),
                       const SizedBox(height: 18),
-                      const Text('Step 1 — send this request code',
+                      const Text('Step 1 — send this Device ID',
                           style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: AppColors.ink2)),
                       const SizedBox(height: 6),
                       Container(
@@ -110,26 +109,26 @@ class _ActivationScreenState extends State<ActivationScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             SelectableText(
-                              License.requestCode,
+                              License.deviceId,
                               style: const TextStyle(
                                 fontFamily: 'monospace',
-                                fontSize: 12.5,
-                                height: 1.45,
-                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                                height: 1.4,
+                                fontWeight: FontWeight.w800,
                                 color: AppColors.navy,
                               ),
                             ),
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 6),
                             Row(
                               children: [
-                                Expanded(
+                                const Expanded(
                                   child: Text(
-                                    'Device: ${License.deviceId}',
-                                    style: const TextStyle(fontSize: 11.5, color: AppColors.ink2),
+                                    'This ID belongs to this phone only.',
+                                    style: TextStyle(fontSize: 11.5, color: AppColors.ink2),
                                   ),
                                 ),
                                 TextButton.icon(
-                                  onPressed: _copyRequest,
+                                  onPressed: _copyDeviceId,
                                   style: TextButton.styleFrom(
                                     foregroundColor: AppColors.blueDeep,
                                     padding: const EdgeInsets.symmetric(horizontal: 10),
