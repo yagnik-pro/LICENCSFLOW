@@ -8,7 +8,9 @@ class Background {
   static Future<bool> enable() async {
     const config = FlutterBackgroundAndroidConfig(
       notificationTitle: 'OTP Flow is running',
-      notificationText: 'Watching your Meesho accounts for new return OTPs',
+      notificationText: 'Keeping your Meesho sessions signed in',
+      // Quiet: this notification is a requirement of Android's foreground
+      // service, not something worth buzzing about.
       notificationImportance: AndroidNotificationImportance.normal,
       enableWifiLock: true,
       showBadge: false,
