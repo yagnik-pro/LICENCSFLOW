@@ -27,7 +27,7 @@ class Background {
 
   static Future<void> disable() async {
     try {
-      if (await FlutterBackground.isBackgroundExecutionEnabled) {
+      if (FlutterBackground.isBackgroundExecutionEnabled) {
         await FlutterBackground.disableBackgroundExecution();
       }
     } catch (_) {}
