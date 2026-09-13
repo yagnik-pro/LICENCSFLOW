@@ -10,6 +10,10 @@ class Account {
   bool autoName;        // name came from Meesho, overwrite on refresh
   String supplierId;
   String identifier;
+
+  /// Consecutive quick-route failures. A few in a row and this account falls
+  /// back to the page route until it succeeds again.
+  int apiFailures;
   String token;
   List<Map<String, String>> cookies;
   Map<String, String> storage;
@@ -30,6 +34,7 @@ class Account {
     this.autoName = true,
     this.supplierId = '',
     this.identifier = '',
+    this.apiFailures = 0,
     this.token = '',
     List<Map<String, String>>? cookies,
     Map<String, String>? storage,
