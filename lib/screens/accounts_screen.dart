@@ -283,9 +283,27 @@ class _AccountsScreenState extends State<AccountsScreen> {
                     Row(
                       children: [
                         Flexible(
-                          child: Text(a.name,
-                              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          child: Text.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: a.name,
+                                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                                ),
+                                if (a.phone.isNotEmpty)
+                                  TextSpan(
+                                    text: '  (${a.phone})',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                      color: AppColors.ink2,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                         const SizedBox(width: 5),
                         const Icon(Icons.edit_outlined, size: 14, color: AppColors.ink2),
