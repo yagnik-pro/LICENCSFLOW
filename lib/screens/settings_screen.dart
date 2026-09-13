@@ -176,7 +176,9 @@ class SettingsScreen extends StatelessWidget {
                             }
                           },
                           title: const Text('Keep running 24/7', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                          subtitle: const Text('Keeps refreshing even when the app is closed',
+                          subtitle: const Text(
+                              'Holds your Meesho sessions open so OTPs come back in a second, '
+                              'and keeps refreshing while the app is in the background',
                               style: TextStyle(fontSize: 12.4, color: AppColors.ink2)),
                           contentPadding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
                         ),
