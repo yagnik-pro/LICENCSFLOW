@@ -24,9 +24,6 @@ class AppStore extends ChangeNotifier {
   bool notifyOnNew = true;
   bool backgroundEnabled = true;
 
-  /// Set once Meesho's WAF starts refusing hand-made API calls. Reset on every
-  /// app start, so a change on their side is picked up without a reinstall.
-  bool apiBlocked = false;
 
   bool busy = false;
   String? busyLabel;
@@ -264,8 +261,10 @@ class AppStore extends ChangeNotifier {
       a.cookies = r.cookies;
       if (r.identifier.isNotEmpty) a.identifier = r.identifier;
       if (r.storage.isNotEmpty) a.storage = r.storage;
+      if (r.supplierId.isNotEmpty) a.supplierId = r.supplierId;
       if (r.storeName.isNotEmpty && a.autoName) a.name = r.storeName;
       a.lastLogin = DateTime.now().millisecondsSinceEpoch;
+      a.apiFailures = 0; // fresh session deserves a fresh try at the quick route
       a.status = AccStatus.ok;
       return null;
     } catch (e) {
@@ -310,13 +309,20 @@ class AppStore extends ChangeNotifier {
       var gotQuick = false;
       var pageReady = false;
 
-      // supplier_id is what unlocks the one-request path. Ask the API for it
-      // first; only if that fails do we open the Returns page to find it.
-      if (a.supplierId.isEmpty && !apiBlocked) {
+      // supplier_id is what unlocks the one-request path. It is usually sitting
+      // in the storage we already saved at login; only ask the API if it isn't.
+      if (a.supplierId.isEmpty) {
+        a.supplierId = WebSession.supplierIdFromStorage(a.storage);
+      }
+      if (a.supplierId.isEmpty && a.apiFailures < 3) {
         await _fetchDetails(a);
       }
 
-      if (!apiBlocked && a.supplierId.isNotEmpty) {
+      // A run of failures for this account means the quick route is not working
+      // for it, so stop paying for the attempt. It is per account on purpose:
+      // one account having a bad moment used to push every other account onto
+      // the slow page route.
+      if (a.apiFailures < 3 && a.supplierId.isNotEmpty) {
         try {
           data = await WebSession.apiCall(
             a.cookies,
@@ -337,10 +343,11 @@ class AppStore extends ChangeNotifier {
             },
           );
           gotQuick = true;
+          a.apiFailures = 0;
         } on SessionExpired {
           rethrow;
         } catch (_) {
-          apiBlocked = true;
+          a.apiFailures++;
         }
       }
 
