@@ -30,10 +30,18 @@ class MeeshoApi {
         'otp_code', 'supplier_delivery_otp', 'delivery_otp', 'otp', 'end_otp',
         'return_otp', 'admin_lock_otp',
       ]);
-      final carrier = _pick(map, const [
+      // Meesho sends both "carrier_name":"shadowfax" and a nested
+      // "carrier_details":{"name":"Shadowfax"} - the nested one is already
+      // capitalised the way the panel shows it.
+      var carrier = _pick(map, const [
         'carrier', 'courier', 'carrier_name', 'courier_name', 'logistics_name',
         'logistics_partner', 'sp_name', 'name',
       ]);
+      final details = map['carrier_details'];
+      if (details is Map) {
+        final pretty = details['name'];
+        if (pretty != null && pretty.toString().trim().isNotEmpty) carrier = pretty;
+      }
 
       if (otp != null && carrier != null) {
         final otpStr = otp.toString().trim();
