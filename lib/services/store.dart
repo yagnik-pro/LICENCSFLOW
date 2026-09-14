@@ -468,51 +468,108 @@ class AppStore extends ChangeNotifier {
     final s = a.summary;
     s.error = null;
 
-    Future<dynamic> call(String path) => WebSession.apiCall(
-          a.cookies,
-          path,
-          identifier: a.identifier,
-          storage: a.storage,
-          body: body,
-          onCookies: (c) {
-            if (c.isNotEmpty) a.cookies = c;
-          },
-        );
-
     try {
-      final pay = await call('/api/payouts/payments/upcoming-total-amount');
+      final pay = await WebSession.apiCall(
+        a.cookies,
+        '/api/payouts/payments/upcoming-total-amount',
+        identifier: a.identifier,
+        storage: a.storage,
+        body: body,
+        onCookies: (c) {
+          if (c.isNotEmpty) a.cookies = c;
+        },
+      );
+      // Meesho answers {"headerAmount":"₹59.62K","netAmount":59625.66} — the
+      // rounded header string is for display, netAmount is the real figure.
       s.upcomingPayment = _num(pay, const [
-        'upcoming_total_amount', 'upcomingTotalAmount', 'total_amount', 'totalAmount', 'amount',
+        'netAmount', 'net_amount', 'upcoming_total_amount', 'total_amount', 'amount',
       ]);
+      s.headerAmount = MeeshoApi.digInto(pay, const ['headerAmount', 'header_amount']);
       s.nextPaymentDate = MeeshoApi.digInto(pay, const [
-        'next_payment_date', 'payment_date', 'nextPaymentDate', 'date',
+        'next_payment_date', 'payment_date', 'nextPaymentDate',
       ]);
     } on TooManyRequests {
       s.error = 'Too many requests - wait a minute, then refresh';
-      s.fetchedAt = DateTime.now().millisecondsSinceEpoch;
-      notifyListeners();
-      return;
     } catch (e) {
       s.error = e.toString().replaceFirst('Exception: ', '');
     }
 
+    // Unscheduled payouts — the list Meesho shows under the 7-day figure.
     try {
-      final orders = await call('/api/fulfillment/orders/reqPendingOrders');
-      s.pendingOrders = _int(orders, const [
-        'pending_orders', 'pendingOrders', 'pending_order_count', 'count', 'total',
-      ]);
-      s.readyToShip = _int(orders, const [
-        'ready_to_ship', 'readyToShip', 'rts_count', 'ready_to_ship_count',
+      final ui = await WebSession.apiCall(
+        a.cookies,
+        '/api/payouts/payments/all-ui-data',
+        identifier: a.identifier,
+        storage: a.storage,
+        body: body,
+        onCookies: (c) {
+          if (c.isNotEmpty) a.cookies = c;
+        },
+      );
+      final rows = _payoutRows(ui);
+      if (rows.isNotEmpty) s.payouts = rows;
+      s.unscheduledPayout = _num(ui, const [
+        'netAmount', 'net_amount', 'total_amount', 'totalAmount', 'amount',
       ]);
     } on TooManyRequests {
-      s.error = 'Too many requests - wait a minute, then refresh';
-    } catch (e) {
-      s.error ??= e.toString().replaceFirst('Exception: ', '');
+      s.error ??= 'Too many requests - wait a minute, then refresh';
+    } catch (_) {
+      // The 7-day figure above is the important one; a missing list is fine.
     }
 
     s.fetchedAt = DateTime.now().millisecondsSinceEpoch;
     await _save();
     notifyListeners();
+  }
+
+  /// Turns Meesho's payoutUIList / payoutList into rows we can show. The shape
+  /// varies, so each entry is searched for a label, an amount and a date rather
+  /// than assuming fixed keys.
+  static List<PayoutRow> _payoutRows(dynamic data) {
+    final out = <PayoutRow>[];
+
+    void collect(dynamic node, int depth) {
+      if (depth > 6 || node == null) return;
+      if (node is List) {
+        for (final v in node) {
+          collect(v, depth + 1);
+        }
+        return;
+      }
+      if (node is! Map) return;
+      final map = node.map((k, v) => MapEntry(k.toString(), v));
+
+      final amount = _num(map, const [
+        'netAmount', 'net_amount', 'amount', 'total_amount', 'totalAmount', 'value',
+      ]);
+      final label = MeeshoApi.digInto(map, const [
+        'title', 'label', 'name', 'heading', 'type', 'payout_type',
+      ]);
+      if (amount != null && label != null && label.length < 60) {
+        final date = MeeshoApi.digInto(map, const [
+          'date', 'payment_date', 'payout_date', 'settlement_date', 'subtitle',
+        ]);
+        final already = out.any((r) => r.label == label && r.amount == amount);
+        if (!already) out.add(PayoutRow(label: label, amount: amount, date: date));
+      }
+
+      for (final v in map.values) {
+        collect(v, depth + 1);
+      }
+    }
+
+    // Prefer the lists Meesho names explicitly.
+    if (data is Map) {
+      for (final key in const ['payoutUIList', 'payout_ui_list', 'payoutList', 'payout_list']) {
+        final v = data[key];
+        if (v != null) {
+          collect(v, 0);
+          if (out.isNotEmpty) return out;
+        }
+      }
+    }
+    collect(data, 0);
+    return out;
   }
 
   /// Loads figures for every account, one at a time.
@@ -561,6 +618,11 @@ class AppStore extends ChangeNotifier {
       accounts.fold<int>(0, (t, a) => t + (a.summary.pendingOrders ?? 0));
   int get totalReadyToShip =>
       accounts.fold<int>(0, (t, a) => t + (a.summary.readyToShip ?? 0));
+
+  /// True once at least one account reported an order count. Until then the
+  /// Dashboard hides those tiles rather than showing a misleading zero.
+  bool get hasOrderCounts =>
+      accounts.any((a) => a.summary.pendingOrders != null || a.summary.readyToShip != null);
 
   void _notifyNew(Map<String, Set<String>> before) {
     for (final a in accounts) {
