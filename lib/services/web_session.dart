@@ -441,8 +441,10 @@ class WebSession {
             // "Invalid client type" is the only reason to try another value.
             if (status == 400 && text.contains('client type')) continue outer;
 
-            // Any other status is a real answer - no point retrying.
-            break;
+            // Any other status is a real answer from Meesho - a validation
+            // complaint, a 404, whatever. Trying the remaining client-types
+            // would just be three more requests for the same reply.
+            break outer;
           }
         }
       }
