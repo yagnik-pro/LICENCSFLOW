@@ -209,14 +209,7 @@ class _OtpScreenState extends State<OtpScreen> {
                 ],
               ),
             ),
-            if (a.lastError != null && a.otps.isEmpty)
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                decoration: BoxDecoration(color: const Color(0xFFFDECEA), borderRadius: BorderRadius.circular(10)),
-                child: Text(a.lastError!, style: const TextStyle(color: AppColors.danger, fontSize: 12.3, fontWeight: FontWeight.w600)),
-              ),
+            if (a.lastError != null && a.otps.isEmpty) _errorBlock(a),
             ...a.otps.map((o) => _otpRow(o.carrier, o.time, o.otp, o.count)),
           ],
         ),
@@ -269,6 +262,71 @@ class _OtpScreenState extends State<OtpScreen> {
         ),
       );
     }).toList();
+  }
+
+  /// Shown when an account could not be read. A dead session is not something
+  /// the person can guess at, so the way to fix it sits right here.
+  Widget _errorBlock(Account a) {
+    final needsLogin = a.status == AccStatus.needsLogin ||
+        a.lastError!.toLowerCase().contains('session') ||
+        a.lastError!.toLowerCase().contains('login');
+    final rateLimited = a.lastError!.toLowerCase().contains('too many');
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: rateLimited ? const Color(0xFFFFF6E5) : const Color(0xFFFDECEA),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                rateLimited ? Icons.hourglass_bottom_rounded : Icons.error_outline_rounded,
+                size: 18,
+                color: rateLimited ? AppColors.warn : AppColors.danger,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  a.lastError!,
+                  style: TextStyle(
+                    color: rateLimited ? AppColors.warn : AppColors.danger,
+                    fontSize: 12.8,
+                    height: 1.4,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (!rateLimited) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              height: 42,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.danger,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: store.busy ? null : () => store.reloginAll([a]),
+                icon: const Icon(Icons.login_rounded, size: 18),
+                label: Text(
+                  needsLogin ? 'Relogin account' : 'Try again',
+                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   Widget _otpRow(String title, String sub, String otp, int count) {
