@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../main.dart';
 import '../theme.dart';
+import '../models/summary.dart';
 import '../widgets/brand.dart';
 
 /// Upcoming payouts, account by account.
@@ -31,6 +32,58 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
     return '₹${buf.toString().split('').reversed.join()}';
   }
 
+  /// Meesho calls these "Unscheduled Payouts" — the breakdown that sits under
+  /// the seven-day figure.
+  Widget _payoutList(List<PayoutRow> rows) {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.skyLine, width: 1)),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Unscheduled Payouts',
+              style: TextStyle(
+                  fontSize: 11.5,
+                  letterSpacing: .6,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.ink2)),
+          const SizedBox(height: 8),
+          ...rows.map((r) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(r.label,
+                              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                          if (r.date != null)
+                            Text(r.date!,
+                                style: const TextStyle(fontSize: 11, color: AppColors.ink2)),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      _money(r.amount),
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w800,
+                        color: (r.amount ?? 0) < 0 ? AppColors.danger : AppColors.navy,
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -45,7 +98,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
               title: 'Payments',
               subtitle: total == 0
                   ? '${accounts.length} account(s)'
-                  : '${accounts.length} account(s) · ${_money(total)} upcoming',
+                  : '${accounts.length} account(s) · ${_money(total)} in 7 days',
               actions: [
                 IconButton(
                   tooltip: 'Reload',
@@ -77,7 +130,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                             padding: const EdgeInsets.symmetric(vertical: 20),
                             child: Column(
                               children: [
-                                const Text('Upcoming across all accounts',
+                                const Text('Next 7 Days Payouts',
                                     style: TextStyle(
                                         fontSize: 12.5,
                                         color: AppColors.ink2,
@@ -98,7 +151,9 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                           ...accounts.map((a) {
                             final s = a.summary;
                             return FlowCard(
-                              child: Padding(
+                              child: Column(
+                                children: [
+                                  Padding(
                                 padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
                                 child: Row(
                                   children: [
@@ -153,7 +208,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                                     ),
                                     const SizedBox(width: 8),
                                     Text(
-                                      _money(s.upcomingPayment),
+                                      s.headerAmount ?? _money(s.upcomingPayment),
                                       style: const TextStyle(
                                           fontSize: 16.5,
                                           fontWeight: FontWeight.w800,
@@ -161,6 +216,9 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                                     ),
                                   ],
                                 ),
+                              ),
+                                  if (s.payouts.isNotEmpty) _payoutList(s.payouts),
+                                ],
                               ),
                             );
                           }),
