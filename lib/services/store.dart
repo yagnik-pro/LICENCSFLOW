@@ -278,7 +278,7 @@ class AppStore extends ChangeNotifier {
     // A hung WebView used to leave the account spinning forever and, because
     // the shared lock never released, block every other account too.
     return _fetchOneInner(a, allowRelogin: allowRelogin)
-        .timeout(const Duration(seconds: 75), onTimeout: () {
+        .timeout(const Duration(seconds: 45), onTimeout: () {
       a.status = AccStatus.error;
       a.lastError = 'Timed out - tap refresh to try again';
     });
@@ -317,7 +317,7 @@ class AppStore extends ChangeNotifier {
       if (a.phone.isEmpty) {
         a.phone = WebSession.phoneFromStorage(a.storage);
       }
-      if (a.supplierId.isEmpty && a.apiFailures < 3) {
+      if ((a.supplierId.isEmpty || a.phone.isEmpty) && a.apiFailures < 3) {
         await _fetchDetails(a);
       }
 
@@ -349,6 +349,12 @@ class AppStore extends ChangeNotifier {
           a.apiFailures = 0;
         } on SessionExpired {
           rethrow;
+        } on TooManyRequests {
+          // Opening the Returns page now would mean even more requests, which
+          // is the opposite of what a rate limit is asking for.
+          a.status = AccStatus.error;
+          a.lastError = 'Too many requests - wait a minute, then refresh';
+          return;
         } catch (_) {
           a.apiFailures++;
         }
