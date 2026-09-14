@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/account.dart';
+import '../models/summary.dart';
 import 'meesho_api.dart';
 import 'web_session.dart';
 import 'notifier.dart';
@@ -448,6 +449,118 @@ class AppStore extends ChangeNotifier {
       // The page fallback will pick these up instead.
     }
   }
+
+  // ============================================ dashboard and payment figures
+  /// Loads the Dashboard and Payments numbers for one account.
+  ///
+  /// Called only when those tabs are opened, never as part of an OTP refresh.
+  /// Meesho rate-limits, and an earlier version that fired extra calls on every
+  /// refresh is what got this app throttled.
+  Future<void> _loadSummary(Account a) async {
+    if (a.cookies.isEmpty || a.identifier.isEmpty) return;
+    final body = {
+      if (a.supplierId.isNotEmpty) 'supplier_id': int.tryParse(a.supplierId) ?? a.supplierId,
+      'identifier': a.identifier,
+      'child_supplier_identifier': null,
+      'child_supplier_id': null,
+    };
+
+    final s = a.summary;
+    s.error = null;
+
+    Future<dynamic> call(String path) => WebSession.apiCall(
+          a.cookies,
+          path,
+          identifier: a.identifier,
+          storage: a.storage,
+          body: body,
+          onCookies: (c) {
+            if (c.isNotEmpty) a.cookies = c;
+          },
+        );
+
+    try {
+      final pay = await call('/api/payouts/payments/upcoming-total-amount');
+      s.upcomingPayment = _num(pay, const [
+        'upcoming_total_amount', 'upcomingTotalAmount', 'total_amount', 'totalAmount', 'amount',
+      ]);
+      s.nextPaymentDate = MeeshoApi.digInto(pay, const [
+        'next_payment_date', 'payment_date', 'nextPaymentDate', 'date',
+      ]);
+    } on TooManyRequests {
+      s.error = 'Too many requests - wait a minute, then refresh';
+      s.fetchedAt = DateTime.now().millisecondsSinceEpoch;
+      notifyListeners();
+      return;
+    } catch (e) {
+      s.error = e.toString().replaceFirst('Exception: ', '');
+    }
+
+    try {
+      final orders = await call('/api/fulfillment/orders/reqPendingOrders');
+      s.pendingOrders = _int(orders, const [
+        'pending_orders', 'pendingOrders', 'pending_order_count', 'count', 'total',
+      ]);
+      s.readyToShip = _int(orders, const [
+        'ready_to_ship', 'readyToShip', 'rts_count', 'ready_to_ship_count',
+      ]);
+    } on TooManyRequests {
+      s.error = 'Too many requests - wait a minute, then refresh';
+    } catch (e) {
+      s.error ??= e.toString().replaceFirst('Exception: ', '');
+    }
+
+    s.fetchedAt = DateTime.now().millisecondsSinceEpoch;
+    await _save();
+    notifyListeners();
+  }
+
+  /// Loads figures for every account, one at a time.
+  Future<void> loadSummaries({bool force = false}) async {
+    if (busy || accounts.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final targets = accounts.where((a) {
+      if (force) return true;
+      final at = a.summary.fetchedAt;
+      // Re-reading figures that are minutes old is not worth a request.
+      return at == null || now - at > 10 * 60 * 1000;
+    }).toList();
+    if (targets.isEmpty) return;
+
+    busy = true;
+    busyLabel = 'Loading figures…';
+    notifyListeners();
+    try {
+      for (final a in targets) {
+        await _loadSummary(a).timeout(const Duration(seconds: 40), onTimeout: () {
+          a.summary.error = 'Timed out';
+        });
+      }
+    } finally {
+      busy = false;
+      busyLabel = null;
+      notifyListeners();
+    }
+  }
+
+  static num? _num(dynamic data, List<String> keys) {
+    final v = MeeshoApi.digInto(data, keys);
+    if (v == null) return null;
+    return num.tryParse(v.replaceAll(RegExp(r'[^\d.\-]'), ''));
+  }
+
+  static int? _int(dynamic data, List<String> keys) {
+    final v = _num(data, keys);
+    return v?.round();
+  }
+
+  /// Totals across every account, for the Dashboard header.
+  num get totalUpcomingPayment =>
+      accounts.fold<num>(0, (t, a) => t + (a.summary.upcomingPayment ?? 0));
+  int get totalPendingOrders =>
+      accounts.fold<int>(0, (t, a) => t + (a.summary.pendingOrders ?? 0));
+  int get totalReadyToShip =>
+      accounts.fold<int>(0, (t, a) => t + (a.summary.readyToShip ?? 0));
 
   void _notifyNew(Map<String, Set<String>> before) {
     for (final a in accounts) {
