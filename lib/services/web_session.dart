@@ -59,6 +59,14 @@ class PanelResult {
   });
 }
 
+/// Meesho pushed back because we asked too often. Retrying immediately is the
+/// worst possible response — their edge escalates repeat offenders from 429 to
+/// a flat "Access Denied".
+class TooManyRequests implements Exception {
+  @override
+  String toString() => 'Meesho is rate limiting - wait a minute and try again';
+}
+
 class SessionExpired implements Exception {
   @override
   String toString() => 'Session expired';
@@ -417,8 +425,18 @@ class WebSession {
               break outer;
             }
 
+            // Rate limited: stop at once. Cycling through the other
+            // client-types here is what turns a 429 into a hard block.
+            if (status == 429) {
+              _record(log.toString());
+              throw TooManyRequests();
+            }
+
             // Stale document: worth one reload, then give up on this pass.
-            if (status == -1) continue;
+            if (status == -1) {
+              if (attempt == 1) break outer;
+              continue;
+            }
 
             // "Invalid client type" is the only reason to try another value.
             if (status == 400 && text.contains('client type')) continue outer;
@@ -660,7 +678,7 @@ class WebSession {
         var pageReady = false;
         var lastSample = '';
 
-        for (var i = 0; i < 30; i++) {
+        for (var i = 0; i < 15; i++) {
           await Future.delayed(const Duration(milliseconds: 900));
           final c = ctl;
           if (c == null) continue;
