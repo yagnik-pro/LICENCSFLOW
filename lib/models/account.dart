@@ -1,4 +1,5 @@
 import 'otp_entry.dart';
+import 'summary.dart';
 
 enum AccStatus { idle, working, ok, needsLogin, error }
 
@@ -27,6 +28,9 @@ class Account {
   int? lastLogin;
   int? fetchedAt;
   List<OtpEntry> otps;
+
+  /// Dashboard and payment figures. Loaded only when those tabs are opened.
+  AccountSummary summary;
   num? upcomingPayment;
 
   Account({
@@ -47,10 +51,12 @@ class Account {
     this.lastLogin,
     this.fetchedAt,
     List<OtpEntry>? otps,
+    AccountSummary? summary,
     this.upcomingPayment,
   })  : name = name ?? email.split('@').first,
         cookies = cookies ?? [],
         storage = storage ?? {},
+        summary = summary ?? AccountSummary(),
         otps = otps ?? [];
 
   int get totalReturns => otps.fold(0, (s, o) => s + o.count);
@@ -70,6 +76,7 @@ class Account {
         'lastLogin': lastLogin,
         'fetchedAt': fetchedAt,
         'otps': otps.map((o) => o.toJson()).toList(),
+        'summary': summary.toJson(),
         'upcomingPayment': upcomingPayment,
       };
 
@@ -91,6 +98,9 @@ class Account {
         lastLogin: j['lastLogin'],
         fetchedAt: j['fetchedAt'],
         otps: ((j['otps'] ?? []) as List).map((o) => OtpEntry.fromJson(Map<String, dynamic>.from(o))).toList(),
+        summary: j['summary'] == null
+            ? null
+            : AccountSummary.fromJson(Map<String, dynamic>.from(j['summary'] as Map)),
         upcomingPayment: j['upcomingPayment'],
       );
 }
