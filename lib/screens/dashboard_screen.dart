@@ -80,7 +80,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             children: [
                               Expanded(
                                 child: _bigTile(
-                                  'Upcoming payment',
+                                  'Next 7 days',
                                   _money(store.totalUpcomingPayment == 0 ? null : store.totalUpcomingPayment),
                                   Icons.account_balance_wallet_outlined,
                                 ),
@@ -95,22 +95,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _bigTile('Pending orders',
-                                    _count(store.totalPendingOrders == 0 ? null : store.totalPendingOrders),
-                                    Icons.inventory_2_outlined),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: _bigTile('Ready to ship',
-                                    _count(store.totalReadyToShip == 0 ? null : store.totalReadyToShip),
-                                    Icons.local_shipping_outlined),
-                              ),
-                            ],
-                          ),
+                          if (store.hasOrderCounts) ...[
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _bigTile('Pending orders',
+                                      _count(store.totalPendingOrders), Icons.inventory_2_outlined),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _bigTile('Ready to ship',
+                                      _count(store.totalReadyToShip), Icons.local_shipping_outlined),
+                                ),
+                              ],
+                            ),
+                          ],
                           const SizedBox(height: 18),
                           const Text('By account',
                               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
@@ -145,10 +145,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     const SizedBox(height: 10),
                                     Row(
                                       children: [
-                                        _miniStat('Payment', _money(s.upcomingPayment)),
-                                        _miniStat('Pending', _count(s.pendingOrders)),
-                                        _miniStat('Ready', _count(s.readyToShip)),
+                                        _miniStat('Payment',
+                                            s.headerAmount ?? _money(s.upcomingPayment)),
                                         _miniStat('Returns', '${a.totalReturns}'),
+                                        _miniStat('OTPs', '${a.otps.length}'),
+                                        if (s.pendingOrders != null)
+                                          _miniStat('Pending', _count(s.pendingOrders)),
                                       ],
                                     ),
                                     if (s.error != null) ...[
@@ -168,6 +170,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           const Text(
                             'Figures refresh when you open this tab, and no more than once every '
                             'ten minutes. Pull down to force a reload.',
+                            style: TextStyle(fontSize: 12, color: AppColors.ink2, height: 1.4),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Order counts are not here yet — the endpoint Meesho uses for them '
+                            'has not been identified, and a wrong number is worse than none.',
                             style: TextStyle(fontSize: 12, color: AppColors.ink2, height: 1.4),
                           ),
                         ],
