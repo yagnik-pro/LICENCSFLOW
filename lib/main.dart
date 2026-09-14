@@ -8,6 +8,8 @@ import 'services/background.dart';
 import 'services/web_session.dart';
 import 'services/license.dart';
 import 'screens/activation_screen.dart';
+import 'screens/dashboard_screen.dart';
+import 'screens/payments_screen.dart';
 import 'screens/otp_screen.dart';
 import 'screens/accounts_screen.dart';
 import 'screens/settings_screen.dart';
@@ -95,11 +97,17 @@ class Shell extends StatefulWidget {
 }
 
 class _ShellState extends State<Shell> {
-  int _index = 0;
+  int _index = 2; // OTPs - the reason the app exists
 
   @override
   Widget build(BuildContext context) {
-    final pages = [const OtpScreen(), const AccountsScreen(), const SettingsScreen()];
+    final pages = [
+      const DashboardScreen(),
+      const PaymentsScreen(),
+      const OtpScreen(),
+      const AccountsScreen(),
+      const SettingsScreen(),
+    ];
     return Scaffold(
       body: IndexedStack(index: _index, children: pages),
       bottomNavigationBar: Container(
@@ -114,7 +122,7 @@ class _ShellState extends State<Shell> {
               backgroundColor: Colors.white,
               indicatorColor: AppColors.sky,
               labelTextStyle: WidgetStateProperty.resolveWith((s) => TextStyle(
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w700,
                     color: s.contains(WidgetState.selected) ? AppColors.blueDeep : AppColors.ink2,
                   )),
@@ -128,9 +136,26 @@ class _ShellState extends State<Shell> {
               selectedIndex: _index,
               onDestinationSelected: (i) => setState(() => _index = i),
               destinations: const [
-                NavigationDestination(icon: Icon(Icons.vpn_key_outlined), selectedIcon: Icon(Icons.vpn_key), label: 'OTPs'),
-                NavigationDestination(icon: Icon(Icons.people_alt_outlined), selectedIcon: Icon(Icons.people_alt), label: 'Accounts'),
-                NavigationDestination(icon: Icon(Icons.tune_outlined), selectedIcon: Icon(Icons.tune), label: 'Settings'),
+                NavigationDestination(
+                    icon: Icon(Icons.grid_view_outlined),
+                    selectedIcon: Icon(Icons.grid_view_rounded),
+                    label: 'Dashboard'),
+                NavigationDestination(
+                    icon: Icon(Icons.currency_rupee_rounded),
+                    selectedIcon: Icon(Icons.currency_rupee_rounded),
+                    label: 'Payments'),
+                NavigationDestination(
+                    icon: Icon(Icons.vpn_key_outlined),
+                    selectedIcon: Icon(Icons.vpn_key),
+                    label: 'OTPs'),
+                NavigationDestination(
+                    icon: Icon(Icons.people_alt_outlined),
+                    selectedIcon: Icon(Icons.people_alt),
+                    label: 'Accounts'),
+                NavigationDestination(
+                    icon: Icon(Icons.tune_outlined),
+                    selectedIcon: Icon(Icons.tune),
+                    label: 'Settings'),
               ],
             ),
           ),
