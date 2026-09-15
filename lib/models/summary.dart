@@ -19,6 +19,12 @@ class AccountSummary {
   int? readyToShip;
   int? onHold;
 
+  /// Ready-to-ship split by label state. Meesho returns
+  /// `label_not_downloaded_count` alongside the total, so both come from the
+  /// same request.
+  int? rtsLabelPending;
+  int? rtsLabelDone;
+
   /// Why an order count is missing, when it is.
   String? ordersNote;
 
@@ -35,6 +41,8 @@ class AccountSummary {
     this.pendingOrders,
     this.readyToShip,
     this.onHold,
+    this.rtsLabelPending,
+    this.rtsLabelDone,
     this.fetchedAt,
     this.error,
   }) : payouts = payouts ?? [];
@@ -55,6 +63,8 @@ class AccountSummary {
         'pendingOrders': pendingOrders,
         'readyToShip': readyToShip,
         'onHold': onHold,
+        'rtsLabelPending': rtsLabelPending,
+        'rtsLabelDone': rtsLabelDone,
         'fetchedAt': fetchedAt,
       };
 
@@ -70,6 +80,8 @@ class AccountSummary {
         pendingOrders: j['pendingOrders'] as int?,
         readyToShip: j['readyToShip'] as int?,
         onHold: j['onHold'] as int?,
+        rtsLabelPending: j['rtsLabelPending'] as int?,
+        rtsLabelDone: j['rtsLabelDone'] as int?,
         fetchedAt: j['fetchedAt'] as int?,
       );
 }
