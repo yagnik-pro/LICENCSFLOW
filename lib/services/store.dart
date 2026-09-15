@@ -817,6 +817,153 @@ class AppStore extends ChangeNotifier {
     return totals.values.toList()..sort((x, y) => y.qty.compareTo(x.qty));
   }
 
+  /// Finds an order by its AWB.
+  ///
+  /// The AWB's field name is not documented and differs between shipment
+  /// types, so rather than guess we pull a page of orders and look for the
+  /// scanned string anywhere inside a sub-order. That also means a sub-order
+  /// number or a Meesho ID works just as well as an AWB.
+  Future<OrderHit?> findOrder(String code) async {
+    final needle = code.trim().toUpperCase();
+    if (needle.length < 4 || busy) return null;
+
+    busy = true;
+    busyLabel = 'Looking for $needle…';
+    lastScanError = null;
+    notifyListeners();
+
+    try {
+      for (final a in accounts) {
+        if (a.supplierId.isEmpty || a.identifier.isEmpty) continue;
+        // Ready to ship first — that is what gets scanned at handover — then
+        // pending, then on hold.
+        for (final tab in const [
+          ['ready-to-ship', 3],
+          ['pending', 1],
+          ['hold', 0],
+        ]) {
+          try {
+            final res = await WebSession.apiCall(
+              a.cookies,
+              '/api/fulfillment/orders',
+              identifier: a.identifier,
+              storage: a.storage,
+              body: {
+                'enable_hold': true,
+                'supplier_details': {
+                  'id': int.tryParse(a.supplierId) ?? a.supplierId,
+                  'identifier': a.identifier,
+                  'name': a.name,
+                },
+                'cursor': null,
+                'limit': 50,
+                'status': tab[1],
+                'type': tab[0],
+                'identifier': a.identifier,
+                'child_supplier_identifier': null,
+                'child_supplier_id': null,
+              },
+              onCookies: (c) {
+                if (c.isNotEmpty) a.cookies = c;
+              },
+            );
+            final hit = _matchOrder(res, needle, a.name);
+            if (hit != null) return hit;
+          } on TooManyRequests {
+            lastScanError = 'Too many requests - wait a minute, then try again';
+            return null;
+          } catch (_) {
+            // try the next tab
+          }
+        }
+      }
+      lastScanError = 'No order found for $needle in the first 50 of each tab';
+      return null;
+    } finally {
+      busy = false;
+      busyLabel = null;
+      notifyListeners();
+    }
+  }
+
+  /// Message from the last scan, for the UI.
+  String? lastScanError;
+
+  /// Walks the orders payload for a sub-order containing [needle] anywhere.
+  static OrderHit? _matchOrder(dynamic data, String needle, String accountName) {
+    OrderHit? found;
+
+    bool holds(dynamic node, int depth) {
+      if (depth > 5 || node == null) return false;
+      if (node is List) return node.any((v) => holds(v, depth + 1));
+      if (node is Map) return node.values.any((v) => holds(v, depth + 1));
+      return '$node'.toUpperCase().contains(needle);
+    }
+
+    void checkSub(dynamic sub, String awbFromOrder) {
+      if (found != null || sub is! Map) return;
+      if (!holds(sub, 0) && !awbFromOrder.toUpperCase().contains(needle)) return;
+      final m = sub.map((k, v) => MapEntry(k.toString(), v));
+      found = OrderHit(
+        accountName: accountName,
+        image: MeeshoApi.digInto(m, const ['image', 'image_url', 'product_image']) ?? '',
+        sku: MeeshoApi.digInto(m, const [
+              'product_sku', 'sku', 'sku_id', 'seller_sku', 'supplier_sku',
+            ]) ??
+            '',
+        productName: MeeshoApi.digInto(m, const ['name', 'product_name', 'title']) ?? '',
+        subOrderNum: MeeshoApi.digInto(m, const [
+              'sub_order_num', 'sub_order_no', 'sub_order_id', 'id',
+            ]) ??
+            '',
+        awb: MeeshoApi.digInto(m, const [
+              'awb', 'awb_number', 'awb_no', 'tracking_number', 'waybill',
+            ]) ??
+            awbFromOrder,
+        slaStatus: MeeshoApi.digInto(m, const ['sla_status', 'slaStatus', 'sla']) ?? '',
+        label: MeeshoApi.digInto(m, const ['label']) ?? '',
+        qty: _int(m, const ['quantity', 'qty']) ?? 1,
+      );
+    }
+
+    void walk(dynamic node, int depth) {
+      if (found != null || depth > 6 || node == null) return;
+      if (node is List) {
+        for (final v in node) {
+          walk(v, depth + 1);
+        }
+        return;
+      }
+      if (node is! Map) return;
+      final m = node.map((k, v) => MapEntry(k.toString(), v));
+      final orders = m['orders'];
+      if (orders is List) {
+        for (final o in orders) {
+          if (o is! Map) continue;
+          final awb = MeeshoApi.digInto(
+                o.map((k, v) => MapEntry(k.toString(), v)),
+                const ['awb', 'awb_number', 'tracking_number', 'waybill'],
+              ) ??
+              '';
+          final subs = o['sub_orders'];
+          if (subs is List) {
+            for (final sb in subs) {
+              checkSub(sb, awb);
+            }
+          } else {
+            checkSub(o, awb);
+          }
+        }
+      }
+      for (final v in m.values) {
+        walk(v, depth + 1);
+      }
+    }
+
+    walk(data, 0);
+    return found;
+  }
+
   /// Loads figures for every account, one at a time.
   Future<void> loadSummaries({bool force = false}) async {
     if (busy || accounts.isEmpty) return;
