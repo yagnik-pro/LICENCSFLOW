@@ -67,6 +67,20 @@ class TooManyRequests implements Exception {
   String toString() => 'Meesho is rate limiting - wait a minute and try again';
 }
 
+/// One call the Orders page made, kept verbatim so its shape can be reused.
+class OrdersCall {
+  final String url;
+  final String request;
+  final String response;
+  const OrdersCall({required this.url, required this.request, required this.response});
+}
+
+/// Everything the Orders page told us.
+class OrdersProbe {
+  final List<OrdersCall> calls = [];
+  bool get isEmpty => calls.isEmpty;
+}
+
 class SessionExpired implements Exception {
   @override
   String toString() => 'Session expired';
@@ -804,6 +818,99 @@ class WebSession {
   return 'not-found';
 }catch(e){return 'err';}})();
 ''';
+
+  // ================================================================= orders
+  /// Opens the panel's Orders page and records the calls it makes.
+  ///
+  /// The request body for `/api/fulfillment/orders` is not something worth
+  /// guessing at — an earlier attempt at that produced a wall of 400s. The
+  /// panel builds it correctly, so we watch it do so and keep the result.
+  static Future<OrdersProbe> discoverOrders(
+    List<Map<String, String>> cookies,
+    String identifier, {
+    Map<String, String> storage = const {},
+  }) {
+    return _lock.run(() async {
+      await _installCookies(cookies);
+      _pendingStorage = storage;
+
+      final log = StringBuffer();
+      log.writeln('panel orders page  identifier=$identifier');
+
+      InAppWebViewController? ctl;
+      final hw = HeadlessInAppWebView(
+        initialUrlRequest: URLRequest(
+          url: WebUri('$base/panel/v3/new/fulfillment/$identifier/orders'),
+        ),
+        initialSettings: InAppWebViewSettings(
+          javaScriptEnabled: true,
+          thirdPartyCookiesEnabled: true,
+          userAgent: ua,
+        ),
+        initialUserScripts: UnmodifiableListView<UserScript>([
+          UserScript(source: _hookJs, injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START),
+        ]),
+        onWebViewCreated: (c) => ctl = c,
+        onLoadStop: (c, url) async {
+          if (_pendingStorage.isNotEmpty) await installStorage(c, _pendingStorage);
+        },
+      );
+
+      try {
+        await hw.run();
+        String raw = '[]';
+
+        for (var i = 0; i < 15; i++) {
+          await Future.delayed(const Duration(milliseconds: 900));
+          final c = ctl;
+          if (c == null) continue;
+
+          final url = (await c.getUrl())?.toString() ?? '';
+          if (isLoginUrl(url)) {
+            log.writeln('bounced to the login page - session is dead');
+            _record(log.toString());
+            throw SessionExpired();
+          }
+
+          final v = await c.evaluateJavascript(
+              source: "JSON.stringify(window.__otpflow || [])");
+          if (v == null) continue;
+          raw = '$v';
+          if (raw.contains('fulfillment/orders')) break;
+        }
+
+        List<dynamic> entries;
+        try {
+          entries = jsonDecode(raw) as List<dynamic>;
+        } catch (_) {
+          entries = const [];
+        }
+
+        final probe = OrdersProbe();
+        for (final e in entries) {
+          final m = Map<String, dynamic>.from(e as Map);
+          final u = '${m['url'] ?? ''}';
+          if (!u.contains('fulfillment/orders')) continue;
+          final req = '${m['req'] ?? ''}';
+          final body = '${m['body'] ?? ''}';
+          log.writeln('  $u -> HTTP ${m['status']}');
+          if (req.isNotEmpty) {
+            log.writeln('    request: ${req.length > 300 ? '${req.substring(0, 300)}...' : req}');
+          }
+          log.writeln('    response: ${body.length > 500 ? '${body.substring(0, 500)}...' : body}');
+          probe.calls.add(OrdersCall(url: u, request: req, response: body));
+        }
+
+        if (probe.calls.isEmpty) {
+          log.writeln('  the orders page made no /api/fulfillment/orders call');
+        }
+        _record(log.toString());
+        return probe;
+      } finally {
+        await hw.dispose();
+      }
+    });
+  }
 
   // =================================================================== login
   /// Logs in and returns the account's cookies plus its identifier.
