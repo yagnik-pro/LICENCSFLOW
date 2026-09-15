@@ -25,9 +25,10 @@ class AccountSummary {
   int? rtsLabelPending;
   int? rtsLabelDone;
 
-  /// SKU lines behind the "not downloaded" figure. Loaded only when that
-  /// number is tapped — it needs a bigger page of orders than a count does.
+  /// SKU lines behind each label state. Loaded only when that number is
+  /// tapped — they need a bigger page of orders than a count does.
   List<SkuLine> rtsPendingSkus;
+  List<SkuLine> rtsDoneSkus;
 
   /// Why an order count is missing, when it is.
   String? ordersNote;
@@ -48,10 +49,12 @@ class AccountSummary {
     this.rtsLabelPending,
     this.rtsLabelDone,
     List<SkuLine>? rtsPendingSkus,
+    List<SkuLine>? rtsDoneSkus,
     this.fetchedAt,
     this.error,
   })  : payouts = payouts ?? [],
-        rtsPendingSkus = rtsPendingSkus ?? [];
+        rtsPendingSkus = rtsPendingSkus ?? [],
+        rtsDoneSkus = rtsDoneSkus ?? [];
 
   bool get hasAnything =>
       upcomingPayment != null ||
@@ -72,6 +75,7 @@ class AccountSummary {
         'rtsLabelPending': rtsLabelPending,
         'rtsLabelDone': rtsLabelDone,
         'rtsPendingSkus': rtsPendingSkus.map((e) => e.toJson()).toList(),
+        'rtsDoneSkus': rtsDoneSkus.map((e) => e.toJson()).toList(),
         'fetchedAt': fetchedAt,
       };
 
@@ -90,6 +94,9 @@ class AccountSummary {
         rtsLabelPending: j['rtsLabelPending'] as int?,
         rtsLabelDone: j['rtsLabelDone'] as int?,
         rtsPendingSkus: ((j['rtsPendingSkus'] ?? const []) as List)
+            .map((e) => SkuLine.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+        rtsDoneSkus: ((j['rtsDoneSkus'] ?? const []) as List)
             .map((e) => SkuLine.fromJson(Map<String, dynamic>.from(e as Map)))
             .toList(),
         fetchedAt: j['fetchedAt'] as int?,
