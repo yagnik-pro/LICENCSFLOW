@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../main.dart';
+import '../models/account.dart';
 import '../theme.dart';
 import '../widgets/brand.dart';
 
-/// Totals across every account, then a card per account.
-///
-/// Figures load when this tab is opened rather than on every OTP refresh —
-/// Meesho rate-limits, and the extra calls are not worth a throttle.
+/// Orders grouped the way the panel groups them: On Hold, Pending, Ready to
+/// Ship. Each section shows a total, expands to per-account rows, and has its
+/// own refresh. Payments live in their own tab.
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -16,20 +16,19 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  String _money(num? v) {
-    if (v == null) return '—';
-    final s = v.round().toString();
-    // Indian grouping: 12,34,567
-    final buf = StringBuffer();
-    final rev = s.split('').reversed.toList();
-    for (var i = 0; i < rev.length; i++) {
-      if (i == 3 || (i > 3 && (i - 3) % 2 == 0)) buf.write(',');
-      buf.write(rev[i]);
-    }
-    return '₹${buf.toString().split('').reversed.join()}';
-  }
+  final _open = <String>{'pending'};
+  bool _labelsOpen = false;
+  String? _skuForAccount;
 
   String _count(int? v) => v == null ? '—' : '$v';
+
+  String _ago(int? ms) {
+    if (ms == null) return 'not loaded';
+    final m = ((DateTime.now().millisecondsSinceEpoch - ms) / 60000).round();
+    if (m <= 0) return 'just now';
+    if (m < 60) return '$m min ago';
+    return '${(m / 60).floor()} hr ago';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,11 +44,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               subtitle: '${accounts.length} account(s)',
               actions: [
                 IconButton(
-                  tooltip: 'Reload figures',
+                  tooltip: 'Reload everything',
                   onPressed: store.busy ? null : () => store.loadSummaries(force: true),
                   icon: store.busy
                       ? const SizedBox(
-                          width: 20, height: 20,
+                          width: 20,
+                          height: 20,
                           child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
                       : const Icon(Icons.refresh_rounded, color: Colors.white),
                 ),
@@ -61,7 +61,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: FlowEmpty(
                         icon: Icons.insights_outlined,
                         title: 'Nothing to show yet',
-                        body: 'Add a seller account and the figures will appear here.',
+                        body: 'Add a seller account and your order figures appear here.',
                       ),
                     )
                   : RefreshIndicator(
@@ -70,192 +70,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: ListView(
                         padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
                         children: [
-                          if (!store.accounts.any((a) => a.summary.fetchedAt != null))
-                            Container(
-                              margin: const EdgeInsets.only(bottom: 14),
-                              padding: const EdgeInsets.all(13),
-                              decoration: BoxDecoration(
-                                color: AppColors.sky,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.download_rounded,
-                                      size: 18, color: AppColors.blueDeep),
-                                  const SizedBox(width: 9),
-                                  const Expanded(
-                                    child: Text(
-                                      'Figures are not loaded yet. Tap refresh to fetch them.',
-                                      style: TextStyle(fontSize: 12.5, color: AppColors.ink2),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _bigTile(
-                                  'Next 7 days',
-                                  _money(store.totalUpcomingPayment == 0 ? null : store.totalUpcomingPayment),
-                                  Icons.account_balance_wallet_outlined,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: _bigTile(
-                                  'Returns pending',
-                                  '${store.totalReturns}',
-                                  Icons.assignment_return_outlined,
-                                ),
-                              ),
-                            ],
+                          if (!accounts.any((a) => a.summary.fetchedAt != null))
+                            _hint('Figures are not loaded yet. Tap refresh above.'),
+                          _section(
+                            id: 'hold',
+                            title: 'On Hold',
+                            icon: Icons.pause_circle_outline,
+                            colour: AppColors.warn,
+                            total: store.totalOnHold,
+                            valueOf: (a) => a.summary.onHold,
                           ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _bigTile(
-                                  'OTPs waiting',
-                                  '${store.totalOtps}',
-                                  Icons.vpn_key_outlined,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: _bigTile(
-                                  'Accounts',
-                                  '${store.accounts.length}',
-                                  Icons.storefront_outlined,
-                                ),
-                              ),
-                            ],
+                          _section(
+                            id: 'pending',
+                            title: 'Pending Orders',
+                            icon: Icons.more_horiz_rounded,
+                            colour: AppColors.mint,
+                            total: store.totalPendingOrders,
+                            valueOf: (a) => a.summary.pendingOrders,
                           ),
-                          if (store.hasOrderCounts) ...[
-                            const SizedBox(height: 10),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _bigTile('Pending',
-                                      _count(store.totalPendingOrders), Icons.inventory_2_outlined),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: _bigTile('Ready to ship',
-                                      _count(store.totalReadyToShip), Icons.local_shipping_outlined),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: _bigTile('On hold',
-                                      _count(store.totalOnHold), Icons.pause_circle_outline),
-                                ),
-                              ],
-                            ),
-                            if (store.totalLabelPending > 0 || store.totalLabelDone > 0) ...[
-                              const SizedBox(height: 10),
-                              FlowCard(
-                                margin: EdgeInsets.zero,
-                                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.receipt_long_outlined,
-                                        size: 18, color: AppColors.blue),
-                                    const SizedBox(width: 10),
-                                    const Expanded(
-                                      child: Text('Ready to ship labels',
-                                          style: TextStyle(
-                                              fontSize: 13, fontWeight: FontWeight.w700)),
-                                    ),
-                                    _labelChip('Not downloaded', store.totalLabelPending,
-                                        AppColors.warn),
-                                    const SizedBox(width: 8),
-                                    _labelChip('Downloaded', store.totalLabelDone, AppColors.mint),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ],
-                          const SizedBox(height: 18),
-                          const Text('By account',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-                          const SizedBox(height: 10),
-                          ...accounts.map((a) {
-                            final s = a.summary;
-                            return FlowCard(
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text.rich(
-                                      TextSpan(children: [
-                                        TextSpan(
-                                          text: a.name,
-                                          style: const TextStyle(
-                                              fontSize: 15.5, fontWeight: FontWeight.w800),
-                                        ),
-                                        if (a.phone.isNotEmpty)
-                                          TextSpan(
-                                            text: '  (${a.phone})',
-                                            style: const TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w600,
-                                                color: AppColors.ink2),
-                                          ),
-                                      ]),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Row(
-                                      children: [
-                                        _miniStat('Payment',
-                                            s.headerAmount ?? _money(s.upcomingPayment)),
-                                        _miniStat('Returns', '${a.totalReturns}'),
-                                        _miniStat('OTPs', '${a.otps.length}'),
-                                        if (s.pendingOrders != null)
-                                          _miniStat('Pending', _count(s.pendingOrders)),
-                                        if (s.readyToShip != null)
-                                          _miniStat('Ready', _count(s.readyToShip)),
-                                        if (s.onHold != null)
-                                          _miniStat('On hold', _count(s.onHold)),
-                                        if (s.readyToShip != null)
-                                          _miniStat('Ready', _count(s.readyToShip)),
-                                        if (s.onHold != null)
-                                          _miniStat('On hold', _count(s.onHold)),
-                                        if (s.onHold != null)
-                                          _miniStat('On hold', _count(s.onHold)),
-                                      ],
-                                    ),
-                                    if (s.ordersNote != null) ...[
-                                      const SizedBox(height: 8),
-                                      Text(s.ordersNote!,
-                                          style: const TextStyle(
-                                              fontSize: 11.5, color: AppColors.ink2)),
-                                    ],
-                                    if (s.error != null) ...[
-                                      const SizedBox(height: 8),
-                                      Text(s.error!,
-                                          style: const TextStyle(
-                                              fontSize: 11.8,
-                                              color: AppColors.danger,
-                                              fontWeight: FontWeight.w600)),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            );
-                          }),
+                          _section(
+                            id: 'rts',
+                            title: 'Ready to Ship',
+                            icon: Icons.local_shipping_outlined,
+                            colour: AppColors.blue,
+                            total: store.totalReadyToShip,
+                            valueOf: (a) => a.summary.readyToShip,
+                            extra: _labelSplit(),
+                          ),
                           const SizedBox(height: 8),
                           const Text(
-                            'Figures refresh when you open this tab, and no more than once every '
-                            'ten minutes. Pull down to force a reload.',
-                            style: TextStyle(fontSize: 12, color: AppColors.ink2, height: 1.4),
-                          ),
-                          const SizedBox(height: 6),
-                          const Text(
-                            'The first load opens your Orders page once to learn how Meesho asks '
-                            'for order counts. After that it is a plain API call.',
+                            'Counts come from the same API the panel uses. Tap a section to see '
+                            'it account by account.',
                             style: TextStyle(fontSize: 12, color: AppColors.ink2, height: 1.4),
                           ),
                         ],
@@ -268,62 +113,282 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  /// Whatever Meesho said about order counts, rather than a generic line —
-  /// that text is what tells us which key to read next.
-  String _ordersNote() {
-    for (final a in store.accounts) {
-      final n = a.summary.ordersNote;
-      if (n != null && n.isNotEmpty) return n;
-    }
-    return 'Order counts show up once Meesho returns them.';
-  }
+  Widget _hint(String text) => Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(13),
+        decoration: BoxDecoration(color: AppColors.sky, borderRadius: BorderRadius.circular(12)),
+        child: Row(
+          children: [
+            const Icon(Icons.download_rounded, size: 18, color: AppColors.blueDeep),
+            const SizedBox(width: 9),
+            Expanded(child: Text(text, style: const TextStyle(fontSize: 12.5, color: AppColors.ink2))),
+          ],
+        ),
+      );
 
-  Widget _bigTile(String label, String value, IconData icon) {
+  Widget _section({
+    required String id,
+    required String title,
+    required IconData icon,
+    required Color colour,
+    required int total,
+    required int? Function(Account) valueOf,
+    Widget? extra,
+  }) {
+    final open = _open.contains(id);
+    final loaded = store.accounts.any((a) => valueOf(a) != null);
+
     return FlowCard(
-      margin: EdgeInsets.zero,
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       child: Column(
         children: [
-          Icon(icon, size: 20, color: AppColors.blue),
-          const SizedBox(height: 8),
-          FittedBox(
-            child: Text(value,
-                style: const TextStyle(
-                    fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.navy)),
+          InkWell(
+            onTap: () => setState(() => open ? _open.remove(id) : _open.add(id)),
+            borderRadius: BorderRadius.circular(18),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 13, 8, 13),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: colour.withOpacity(.12),
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: Icon(icon, size: 19, color: colour),
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title,
+                            style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800)),
+                        Text(
+                          loaded ? 'Total: $total' : 'Not loaded',
+                          style: const TextStyle(
+                              fontSize: 12.3, color: AppColors.ink2, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Refresh $title',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: store.busy ? null : () => store.loadSummaries(force: true),
+                    icon: Icon(Icons.refresh_rounded, size: 20, color: colour),
+                  ),
+                  Icon(open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                      color: AppColors.ink2),
+                ],
+              ),
+            ),
           ),
-          const SizedBox(height: 2),
-          Text(label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 11.5, color: AppColors.ink2, fontWeight: FontWeight.w600)),
+          if (open) ...[
+            ...store.accounts.map((a) => _accountRow(a, valueOf(a), colour)),
+            if (extra != null) extra,
+          ],
         ],
       ),
     );
   }
 
-  Widget _labelChip(String label, int value, Color colour) {
+  Widget _accountRow(Account a, int? value, Color colour) {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.skyLine, width: 1)),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text.rich(
+                  TextSpan(children: [
+                    TextSpan(
+                      text: a.name,
+                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800),
+                    ),
+                    if (a.phone.isNotEmpty)
+                      TextSpan(
+                        text: '  (${a.phone})',
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.ink2),
+                      ),
+                  ]),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(a.email,
+                    style: const TextStyle(fontSize: 11.5, color: AppColors.ink2),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+                Text('Ref: ${_ago(a.summary.fetchedAt)}',
+                    style: const TextStyle(fontSize: 10.5, color: AppColors.ink2)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(_count(value),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: colour)),
+          IconButton(
+            tooltip: 'Refresh ${a.name}',
+            visualDensity: VisualDensity.compact,
+            onPressed: store.busy ? null : () => store.refreshSummaryFor(a),
+            icon: Icon(Icons.refresh_rounded, size: 18, color: colour),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Ready-to-ship splits by label state; tapping through the pending figure
+  /// loads the SKU lines behind it.
+  Widget _labelSplit() {
+    final pending = store.totalLabelPending;
+    final done = store.totalLabelDone;
+    if (pending == 0 && done == 0) return const SizedBox.shrink();
+
     return Column(
       children: [
-        Text('$value',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: colour)),
-        Text(label,
-            style: const TextStyle(
-                fontSize: 10.5, color: AppColors.ink2, fontWeight: FontWeight.w600)),
+        Container(
+          decoration: const BoxDecoration(
+            border: Border(top: BorderSide(color: AppColors.skyLine, width: 1)),
+          ),
+          child: InkWell(
+            onTap: () => setState(() => _labelsOpen = !_labelsOpen),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+              child: Row(
+                children: [
+                  const Icon(Icons.receipt_long_outlined, size: 18, color: AppColors.blue),
+                  const SizedBox(width: 9),
+                  const Expanded(
+                    child: Text('Labels',
+                        style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+                  ),
+                  _chip('Not downloaded', pending, AppColors.warn),
+                  const SizedBox(width: 12),
+                  _chip('Downloaded', done, AppColors.mint),
+                  const SizedBox(width: 4),
+                  Icon(_labelsOpen ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                      size: 20, color: AppColors.ink2),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (_labelsOpen)
+          ...store.accounts.where((a) => (a.summary.rtsLabelPending ?? 0) > 0).map(_skuBlock),
       ],
     );
   }
 
-  Widget _miniStat(String label, String value) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _chip(String label, int value, Color colour) => Column(
         children: [
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 14.5, fontWeight: FontWeight.w800, color: AppColors.navy)),
+          Text('$value',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: colour)),
           Text(label,
               style: const TextStyle(
-                  fontSize: 11, color: AppColors.ink2, fontWeight: FontWeight.w600)),
+                  fontSize: 10, color: AppColors.ink2, fontWeight: FontWeight.w600)),
+        ],
+      );
+
+  Widget _skuBlock(Account a) {
+    final open = _skuForAccount == a.id;
+    final skus = a.summary.rtsPendingSkus;
+
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.skyLine, width: 1)),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () async {
+              setState(() => _skuForAccount = open ? null : a.id);
+              if (!open && skus.isEmpty) await store.loadRtsPendingSkus(a);
+            },
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 10, 14, 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('${a.name} — ${a.summary.rtsLabelPending} awaiting label',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                  Icon(open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                      size: 19, color: AppColors.ink2),
+                ],
+              ),
+            ),
+          ),
+          if (open)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 0, 14, 12),
+              child: skus.isEmpty
+                  ? Text(
+                      store.busy
+                          ? 'Reading SKUs…'
+                          : (a.summary.ordersNote ?? 'No SKU lines found'),
+                      style: const TextStyle(fontSize: 12, color: AppColors.ink2),
+                    )
+                  : Column(
+                      children: [
+                        const Row(
+                          children: [
+                            Expanded(
+                              child: Text('SKU',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      color: AppColors.ink2)),
+                            ),
+                            Text('Qty',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.ink2)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        ...skus.map((k) => Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 3),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(k.sku,
+                                            style: const TextStyle(
+                                                fontSize: 12.5, fontWeight: FontWeight.w700),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
+                                        if (k.name.isNotEmpty)
+                                          Text(k.name,
+                                              style: const TextStyle(
+                                                  fontSize: 10.5, color: AppColors.ink2),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis),
+                                      ],
+                                    ),
+                                  ),
+                                  Text('${k.qty}',
+                                      style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w800,
+                                          color: AppColors.navy)),
+                                ],
+                              ),
+                            )),
+                      ],
+                    ),
+            ),
         ],
       ),
     );
