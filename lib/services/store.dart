@@ -665,6 +665,139 @@ class AppStore extends ChangeNotifier {
     }
   }
 
+  /// Refreshes one account's figures, for the per-row refresh buttons.
+  Future<void> refreshSummaryFor(Account a) async {
+    if (busy) return;
+    busy = true;
+    busyLabel = 'Loading ${a.name}…';
+    notifyListeners();
+    try {
+      await _loadSummary(a).timeout(const Duration(seconds: 40), onTimeout: () {
+        a.summary.error = 'Timed out';
+      });
+    } finally {
+      busy = false;
+      busyLabel = null;
+      notifyListeners();
+    }
+  }
+
+  /// The SKU lines behind the "not downloaded" count.
+  ///
+  /// The same orders endpoint carries them — a count asks for one row, this
+  /// asks for a page and reads the groups whose label has not been downloaded.
+  Future<void> loadRtsPendingSkus(Account a) async {
+    if (a.supplierId.isEmpty || a.identifier.isEmpty || busy) return;
+    busy = true;
+    busyLabel = 'Reading SKUs…';
+    notifyListeners();
+    try {
+      final res = await WebSession.apiCall(
+        a.cookies,
+        '/api/fulfillment/orders',
+        identifier: a.identifier,
+        storage: a.storage,
+        body: {
+          'enable_hold': true,
+          'supplier_details': {
+            'id': int.tryParse(a.supplierId) ?? a.supplierId,
+            'identifier': a.identifier,
+            'name': a.name,
+          },
+          'cursor': null,
+          'limit': 50,
+          'status': 3,
+          'type': 'ready-to-ship',
+          'identifier': a.identifier,
+          'child_supplier_identifier': null,
+          'child_supplier_id': null,
+        },
+        onCookies: (c) {
+          if (c.isNotEmpty) a.cookies = c;
+        },
+      );
+      a.summary.rtsPendingSkus = _skusAwaitingLabel(res);
+      if (a.summary.rtsPendingSkus.isEmpty) {
+        a.summary.ordersNote = 'No SKU lines came back for the pending labels';
+      }
+      await _save();
+    } on TooManyRequests {
+      a.summary.error = 'Too many requests - wait a minute, then refresh';
+    } catch (e) {
+      a.summary.ordersNote = e.toString().replaceFirst('Exception: ', '');
+    } finally {
+      busy = false;
+      busyLabel = null;
+      notifyListeners();
+    }
+  }
+
+  /// Walks `data.groups`, keeps the ones still waiting for a label, and totals
+  /// each SKU across their sub-orders.
+  static List<SkuLine> _skusAwaitingLabel(dynamic data) {
+    final totals = <String, SkuLine>{};
+
+    void addSub(dynamic sub) {
+      if (sub is! Map) return;
+      final m = sub.map((k, v) => MapEntry(k.toString(), v));
+      final sku = MeeshoApi.digInto(m, const ['sku', 'sku_id', 'skuId', 'seller_sku']) ?? '';
+      if (sku.isEmpty) return;
+      final name = MeeshoApi.digInto(m, const ['name', 'product_name', 'title']) ?? '';
+      final qty = _int(m, const ['quantity', 'qty', 'count']) ?? 1;
+      final prev = totals[sku];
+      totals[sku] = SkuLine(
+        sku: sku,
+        name: prev?.name.isNotEmpty == true ? prev!.name : name,
+        qty: (prev?.qty ?? 0) + qty,
+      );
+    }
+
+    void walkGroup(dynamic g) {
+      if (g is! Map) return;
+      final m = g.map((k, v) => MapEntry(k.toString(), v));
+      final downloaded = m['label_downloaded'];
+      if (downloaded == true) return; // already has its label
+      final orders = m['orders'];
+      if (orders is List) {
+        for (final o in orders) {
+          if (o is! Map) continue;
+          final subs = o['sub_orders'];
+          if (subs is List) {
+            for (final sb in subs) {
+              addSub(sb);
+            }
+          } else {
+            addSub(o);
+          }
+        }
+      }
+    }
+
+    void find(dynamic node, int depth) {
+      if (depth > 6 || node == null) return;
+      if (node is List) {
+        for (final v in node) {
+          find(v, depth + 1);
+        }
+        return;
+      }
+      if (node is! Map) return;
+      final groups = node['groups'];
+      if (groups is List) {
+        for (final g in groups) {
+          walkGroup(g);
+        }
+      }
+      for (final v in node.values) {
+        find(v, depth + 1);
+      }
+    }
+
+    find(data, 0);
+    final out = totals.values.toList()..sort((x, y) => y.qty.compareTo(x.qty));
+    return out;
+  }
+
   /// Loads figures for every account, one at a time.
   Future<void> loadSummaries({bool force = false}) async {
     if (busy || accounts.isEmpty) return;
