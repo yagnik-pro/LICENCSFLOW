@@ -17,6 +17,10 @@ class AccountSummary {
 
   int? pendingOrders;
   int? readyToShip;
+  int? onHold;
+
+  /// Why an order count is missing, when it is.
+  String? ordersNote;
 
   int? fetchedAt;
   String? error;
@@ -30,6 +34,7 @@ class AccountSummary {
     List<PayoutRow>? payouts,
     this.pendingOrders,
     this.readyToShip,
+    this.onHold,
     this.fetchedAt,
     this.error,
   }) : payouts = payouts ?? [];
@@ -49,6 +54,7 @@ class AccountSummary {
         'payouts': payouts.map((p) => p.toJson()).toList(),
         'pendingOrders': pendingOrders,
         'readyToShip': readyToShip,
+        'onHold': onHold,
         'fetchedAt': fetchedAt,
       };
 
@@ -63,6 +69,7 @@ class AccountSummary {
             .toList(),
         pendingOrders: j['pendingOrders'] as int?,
         readyToShip: j['readyToShip'] as int?,
+        onHold: j['onHold'] as int?,
         fetchedAt: j['fetchedAt'] as int?,
       );
 }
