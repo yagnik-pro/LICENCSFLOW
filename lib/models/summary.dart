@@ -144,9 +144,17 @@ class OrderHit {
   final String sku;
   final String productName;
   final String subOrderNum;
+  final String orderNum;
+
+  /// AWB and packet id live on the shipment group, not the sub-order.
   final String awb;
+  final String packetId;
+  final String carrier;
+
   final String slaStatus;
+  final String dispatchBy;
   final String label;
+  final String variation;
   final int qty;
 
   const OrderHit({
@@ -155,9 +163,14 @@ class OrderHit {
     this.sku = '',
     this.productName = '',
     this.subOrderNum = '',
+    this.orderNum = '',
     this.awb = '',
+    this.packetId = '',
+    this.carrier = '',
     this.slaStatus = '',
+    this.dispatchBy = '',
     this.label = '',
+    this.variation = '',
     this.qty = 0,
   });
 }
