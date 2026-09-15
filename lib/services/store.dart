@@ -530,6 +530,56 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Turns Meesho's payoutUIList / payoutList into rows we can show. The shape
+  /// varies, so each entry is searched for a label, an amount and a date rather
+  /// than assuming fixed keys.
+  static List<PayoutRow> _payoutRows(dynamic data) {
+    final out = <PayoutRow>[];
+
+    void collect(dynamic node, int depth) {
+      if (depth > 6 || node == null) return;
+      if (node is List) {
+        for (final v in node) {
+          collect(v, depth + 1);
+        }
+        return;
+      }
+      if (node is! Map) return;
+      final map = node.map((k, v) => MapEntry(k.toString(), v));
+
+      final amount = _num(map, const [
+        'netAmount', 'net_amount', 'amount', 'total_amount', 'totalAmount', 'value',
+      ]);
+      final label = MeeshoApi.digInto(map, const [
+        'title', 'label', 'name', 'heading', 'type', 'payout_type',
+      ]);
+      if (amount != null && label != null && label.length < 60) {
+        final date = MeeshoApi.digInto(map, const [
+          'date', 'payment_date', 'payout_date', 'settlement_date', 'subtitle',
+        ]);
+        final already = out.any((r) => r.label == label && r.amount == amount);
+        if (!already) out.add(PayoutRow(label: label, amount: amount, date: date));
+      }
+
+      for (final v in map.values) {
+        collect(v, depth + 1);
+      }
+    }
+
+    // Prefer the lists Meesho names explicitly.
+    if (data is Map) {
+      for (final key in const ['payoutUIList', 'payout_ui_list', 'payoutList', 'payout_list']) {
+        final v = data[key];
+        if (v != null) {
+          collect(v, 0);
+          if (out.isNotEmpty) return out;
+        }
+      }
+    }
+    collect(data, 0);
+    return out;
+  }
+
   /// Order counts per status.
   ///
   /// The body is not invented: it is the exact request the Orders page makes,
