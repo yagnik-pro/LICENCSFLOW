@@ -96,8 +96,30 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
-class _ShellState extends State<Shell> {
+class _ShellState extends State<Shell> with WidgetsBindingObserver {
   int _index = 2; // OTPs - the reason the app exists
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Android reclaims WebView renderers while the app is away, and the stale
+    // one only shows up later as "Failed to fetch". Dropping it on the way back
+    // means the next refresh starts from a healthy browser.
+    if (state == AppLifecycleState.resumed) {
+      WebSession.resetHeadless();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
