@@ -31,6 +31,11 @@ class Account {
 
   /// Dashboard and payment figures. Loaded only when those tabs are opened.
   AccountSummary summary;
+
+  /// The request body the panel uses for its orders call, learned once and
+  /// then replayed so we never have to open that page again.
+  String ordersTemplate;
+  String ordersUrl;
   num? upcomingPayment;
 
   Account({
@@ -52,6 +57,8 @@ class Account {
     this.fetchedAt,
     List<OtpEntry>? otps,
     AccountSummary? summary,
+    this.ordersTemplate = '',
+    this.ordersUrl = '',
     this.upcomingPayment,
   })  : name = name ?? email.split('@').first,
         cookies = cookies ?? [],
@@ -77,6 +84,8 @@ class Account {
         'fetchedAt': fetchedAt,
         'otps': otps.map((o) => o.toJson()).toList(),
         'summary': summary.toJson(),
+        'ordersTemplate': ordersTemplate,
+        'ordersUrl': ordersUrl,
         'upcomingPayment': upcomingPayment,
       };
 
@@ -98,6 +107,8 @@ class Account {
         lastLogin: j['lastLogin'],
         fetchedAt: j['fetchedAt'],
         otps: ((j['otps'] ?? []) as List).map((o) => OtpEntry.fromJson(Map<String, dynamic>.from(o))).toList(),
+        ordersTemplate: j['ordersTemplate'] ?? '',
+        ordersUrl: j['ordersUrl'] ?? '',
         summary: j['summary'] == null
             ? null
             : AccountSummary.fromJson(Map<String, dynamic>.from(j['summary'] as Map)),
