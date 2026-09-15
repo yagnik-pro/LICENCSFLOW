@@ -494,30 +494,34 @@ class AppStore extends ChangeNotifier {
       s.error = e.toString().replaceFirst('Exception: ', '');
     }
 
-    // Unscheduled payouts — the list Meesho shows under the 7-day figure.
-    try {
-      final ui = await WebSession.apiCall(
-        a.cookies,
-        '/api/payouts/payments/all-ui-data',
-        identifier: a.identifier,
-        storage: a.storage,
-        body: body,
-        onCookies: (c) {
-          if (c.isNotEmpty) a.cookies = c;
-        },
-      );
-      final rows = _payoutRows(ui);
-      if (rows.isNotEmpty) s.payouts = rows;
-      s.unscheduledPayout = _num(ui, const [
-        'netAmount', 'net_amount', 'total_amount', 'totalAmount', 'amount',
-      ]);
-    } on TooManyRequests {
-      s.error ??= 'Too many requests - wait a minute, then refresh';
-    } catch (_) {
-      // The 7-day figure above is the important one; a missing list is fine.
+    // Unscheduled payouts. The same body that suits the 7-day call gets a 500
+    // here, so an empty one is tried as well before giving up — this endpoint
+    // takes its context from the session, not the payload.
+    for (final payload in [body, const <String, dynamic>{}]) {
+      try {
+        final ui = await WebSession.apiCall(
+          a.cookies,
+          '/api/payouts/payments/all-ui-data',
+          identifier: a.identifier,
+          storage: a.storage,
+          body: payload,
+          onCookies: (c) {
+            if (c.isNotEmpty) a.cookies = c;
+          },
+        );
+        final rows = _payoutRows(ui);
+        if (rows.isNotEmpty) s.payouts = rows;
+        s.unscheduledPayout = _num(ui, const [
+          'netAmount', 'net_amount', 'total_amount', 'totalAmount', 'amount',
+        ]);
+        break;
+      } on TooManyRequests {
+        s.error ??= 'Too many requests - wait a minute, then refresh';
+        break;
+      } catch (_) {
+        // try the next shape; the 7-day figure above is the important one
+      }
     }
-
-    await _loadOrders(a);
 
     await _loadOrderCounts(a);
 
@@ -528,203 +532,68 @@ class AppStore extends ChangeNotifier {
 
   /// Order counts per status.
   ///
-  /// The panel groups orders as `pending` and `ready-to-ship`; those are the
-  /// exact strings it sends. We ask for a single row and read the total off the
-  /// response, so this stays one small request per status.
-  ///
-  /// `reqPendingOrders` looks like the endpoint for this but is not — it drives
-  /// the bulk SKU report and answers with a validation complaint about
-  /// `requested_status` and `max_transitions`.
+  /// The body is not invented: it is the exact request the Orders page makes,
+  /// captured once and replayed with only `type` swapped. A hand-written body
+  /// comes back 500 — this endpoint wants `enable_hold`, a numeric `status`,
+  /// `limit` and the supplier's name, none of which are guessable.
   Future<void> _loadOrderCounts(Account a) async {
     if (a.supplierId.isEmpty || a.identifier.isEmpty) return;
     final s = a.summary;
 
-    Future<int?> countFor(String status) async {
+    // Without a captured template there is nothing safe to send.
+    if (a.ordersTemplate.isEmpty) {
+      s.ordersNote = 'Order counts need one visit to the Orders page - tap refresh again';
+      return;
+    }
+
+    Map<String, dynamic> base;
+    try {
+      base = Map<String, dynamic>.from(jsonDecode(a.ordersTemplate) as Map);
+    } catch (_) {
+      a.ordersTemplate = '';
+      s.ordersNote = 'Saved orders request could not be read';
+      return;
+    }
+
+    Future<int?> countFor(String type) async {
+      final body = Map<String, dynamic>.from(base)
+        ..['type'] = type
+        ..['cursor'] = null
+        // One row is enough; we only want the total.
+        ..['limit'] = 1;
       try {
         final res = await WebSession.apiCall(
           a.cookies,
-          '/api/fulfillment/orders',
+          a.ordersUrl.isEmpty ? '/api/fulfillment/orders' : a.ordersUrl,
           identifier: a.identifier,
           storage: a.storage,
-          body: {
-            'supplier_details': {
-              'identifier': a.identifier,
-              'id': int.tryParse(a.supplierId) ?? a.supplierId,
-            },
-            'status': status,
-            'page': 1,
-            'size': 1,
-          },
+          body: body,
           onCookies: (c) {
             if (c.isNotEmpty) a.cookies = c;
           },
         );
         final n = _int(res, const ['total_count', 'totalCount', 'count', 'total']);
-        if (n == null) {
-          // Keep what it did say - guessing at the next key is how the wrong
-          // numbers crept in before.
-          s.ordersNote = 'Meesho returned no count for "$status"';
-        }
+        if (n == null) s.ordersNote = 'No count returned for "$type"';
         return n;
       } on TooManyRequests {
         rethrow;
       } catch (e) {
-        s.ordersNote = 'Orders ($status): ${e.toString().replaceFirst('Exception: ', '')}';
+        // A stale template is the usual cause; drop it so the next refresh
+        // captures a fresh one.
+        a.ordersTemplate = '';
+        s.ordersNote = 'Orders ($type): ${e.toString().replaceFirst('Exception: ', '')}';
         return null;
       }
     }
 
     try {
       s.pendingOrders = await countFor('pending');
-      s.readyToShip = await countFor('ready-to-ship');
+      if (a.ordersTemplate.isNotEmpty) {
+        s.readyToShip = await countFor('ready_to_ship');
+      }
+      if (s.pendingOrders != null || s.readyToShip != null) s.ordersNote = null;
     } on TooManyRequests {
       s.error ??= 'Too many requests - wait a minute, then refresh';
-    }
-  }
-
-
-  /// Turns Meesho's payoutUIList / payoutList into rows we can show. The shape
-  /// varies, so each entry is searched for a label, an amount and a date rather
-  /// than assuming fixed keys.
-  static List<PayoutRow> _payoutRows(dynamic data) {
-    final out = <PayoutRow>[];
-
-    void collect(dynamic node, int depth) {
-      if (depth > 6 || node == null) return;
-      if (node is List) {
-        for (final v in node) {
-          collect(v, depth + 1);
-        }
-        return;
-      }
-      if (node is! Map) return;
-      final map = node.map((k, v) => MapEntry(k.toString(), v));
-
-      final amount = _num(map, const [
-        'netAmount', 'net_amount', 'amount', 'total_amount', 'totalAmount', 'value',
-      ]);
-      final label = MeeshoApi.digInto(map, const [
-        'title', 'label', 'name', 'heading', 'type', 'payout_type',
-      ]);
-      if (amount != null && label != null && label.length < 60) {
-        final date = MeeshoApi.digInto(map, const [
-          'date', 'payment_date', 'payout_date', 'settlement_date', 'subtitle',
-        ]);
-        final already = out.any((r) => r.label == label && r.amount == amount);
-        if (!already) out.add(PayoutRow(label: label, amount: amount, date: date));
-      }
-
-      for (final v in map.values) {
-        collect(v, depth + 1);
-      }
-    }
-
-    // Prefer the lists Meesho names explicitly.
-    if (data is Map) {
-      for (final key in const ['payoutUIList', 'payout_ui_list', 'payoutList', 'payout_list']) {
-        final v = data[key];
-        if (v != null) {
-          collect(v, 0);
-          if (out.isNotEmpty) return out;
-        }
-      }
-    }
-    collect(data, 0);
-    return out;
-  }
-
-  /// Order counts for the Dashboard.
-  ///
-  /// The first run watches the panel's own Orders page and keeps the request it
-  /// sends; after that the same shape is reused as a direct API call, with only
-  /// the status swapped. Guessing that body produced nothing but 400s.
-  Future<void> _loadOrders(Account a) async {
-    final s = a.summary;
-
-    if (a.ordersTemplate.isEmpty) {
-      try {
-        final probe = await WebSession.discoverOrders(
-          a.cookies,
-          a.identifier,
-          storage: a.storage,
-        );
-        if (probe.isEmpty) {
-          s.ordersNote = 'Meesho did not expose an order count for this account';
-          return;
-        }
-        // Keep the richest request we saw; that is the one listing orders.
-        final best = probe.calls.reduce(
-            (x, y) => y.request.length > x.request.length ? y : x);
-        a.ordersTemplate = best.request;
-        a.ordersUrl = Uri.parse(best.url).path;
-        _readOrderCounts(a, best.response);
-        await _save();
-        return;
-      } on SessionExpired {
-        rethrow;
-      } catch (e) {
-        s.ordersNote = e.toString().replaceFirst('Exception: ', '');
-        return;
-      }
-    }
-
-    try {
-      final body = jsonDecode(a.ordersTemplate);
-      final data = await WebSession.apiCall(
-        a.cookies,
-        a.ordersUrl.isEmpty ? '/api/fulfillment/orders' : a.ordersUrl,
-        identifier: a.identifier,
-        storage: a.storage,
-        body: body is Map<String, dynamic> ? body : <String, dynamic>{},
-        onCookies: (c) {
-          if (c.isNotEmpty) a.cookies = c;
-        },
-      );
-      _readOrderCounts(a, data);
-    } on TooManyRequests {
-      s.error ??= 'Too many requests - wait a minute, then refresh';
-    } catch (_) {
-      // Template went stale; learn it again next time.
-      a.ordersTemplate = '';
-    }
-  }
-
-  /// Pulls whatever counts the orders response carries.
-  void _readOrderCounts(Account a, dynamic data) {
-    dynamic decoded = data;
-    if (data is String) {
-      try {
-        decoded = jsonDecode(data);
-      } catch (_) {
-        return;
-      }
-    }
-    final s = a.summary;
-    s.pendingOrders = _int(decoded, const [
-      'pending_orders_count', 'pendingOrdersCount', 'pending_count', 'pending_orders', 'pending',
-    ]);
-    s.readyToShip = _int(decoded, const [
-      'ready_to_ship_count', 'readyToShipCount', 'rts_count', 'ready_to_ship', 'readyToShip',
-    ]);
-    s.onHold = _int(decoded, const [
-      'on_hold_count', 'onHoldCount', 'hold_count', 'on_hold', 'onHold',
-    ]);
-
-    // Nothing named? Fall back to the length of whatever list came back.
-    if (s.pendingOrders == null && decoded is Map) {
-      for (final key in const ['orders', 'order_list', 'orderList', 'data', 'results']) {
-        final v = decoded[key];
-        if (v is List) {
-          s.pendingOrders = v.length;
-          break;
-        }
-      }
-    }
-    if (s.pendingOrders == null && s.readyToShip == null && s.onHold == null) {
-      s.ordersNote = 'Orders came back, but with no count we could read';
-      MeeshoApi.lastRawResponse = WebSession.lastDebug;
-    } else {
-      s.ordersNote = null;
     }
   }
 
