@@ -740,16 +740,29 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  /// Walks `data.groups`, keeps the ones in the wanted label state, and totals
-  /// each SKU across their sub-orders.
+  /// Walks `data.groups` and totals each SKU in the wanted label state.
+  ///
+  /// The SKU lives in `product_sku` — not `sku`, which is why an earlier
+  /// version found nothing. The label state is on the sub-order itself as
+  /// "Downloaded" / "Not Downloaded"; the group flag is only a fallback.
   static List<SkuLine> _skusByLabelState(dynamic data, bool downloaded) {
     final totals = <String, SkuLine>{};
 
-    void addSub(dynamic sub) {
+    void addSub(dynamic sub, bool groupDownloaded) {
       if (sub is! Map) return;
       final m = sub.map((k, v) => MapEntry(k.toString(), v));
-      final sku = MeeshoApi.digInto(m, const ['sku', 'sku_id', 'skuId', 'seller_sku']) ?? '';
+
+      final label = '${m['label'] ?? ''}'.toLowerCase();
+      final isDownloaded = label.isEmpty
+          ? groupDownloaded
+          : (label.contains('not') ? false : label.contains('download'));
+      if (isDownloaded != downloaded) return;
+
+      final sku = MeeshoApi.digInto(m, const [
+        'product_sku', 'sku', 'sku_id', 'skuId', 'seller_sku', 'supplier_sku',
+      ]) ?? '';
       if (sku.isEmpty) return;
+
       final name = MeeshoApi.digInto(m, const ['name', 'product_name', 'title']) ?? '';
       final qty = _int(m, const ['quantity', 'qty', 'count']) ?? 1;
       final prev = totals[sku];
@@ -763,8 +776,8 @@ class AppStore extends ChangeNotifier {
     void walkGroup(dynamic g) {
       if (g is! Map) return;
       final m = g.map((k, v) => MapEntry(k.toString(), v));
-      final state = m['label_downloaded'] == true;
-      if (state != downloaded) return;
+      final groupDownloaded =
+          m['label_downloaded'] == true || m['downloaded'] == true;
       final orders = m['orders'];
       if (orders is! List) return;
       for (final o in orders) {
@@ -772,10 +785,10 @@ class AppStore extends ChangeNotifier {
         final subs = o['sub_orders'];
         if (subs is List) {
           for (final sb in subs) {
-            addSub(sb);
+            addSub(sb, groupDownloaded);
           }
         } else {
-          addSub(o);
+          addSub(o, groupDownloaded);
         }
       }
     }
