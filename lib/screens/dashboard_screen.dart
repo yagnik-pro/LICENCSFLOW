@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../main.dart';
 import '../models/account.dart';
+import '../models/summary.dart';
+import 'scan_screen.dart';
 import '../theme.dart';
 import '../widgets/brand.dart';
 
@@ -22,6 +24,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// it is showing its SKUs.
   String? _openRts;
   bool? _skuMode;
+
+  final _awbCtl = TextEditingController();
+  OrderHit? _hit;
+
+  @override
+  void dispose() {
+    _awbCtl.dispose();
+    super.dispose();
+  }
 
   String _count(int? v) => v == null ? '—' : '$v';
 
@@ -73,6 +84,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: ListView(
                         padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
                         children: [
+                          _findBar(),
                           if (!accounts.any((a) => a.summary.fetchedAt != null))
                             _hint('Figures are not loaded yet. Tap refresh above.'),
                           _section(
@@ -113,6 +125,175 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         );
       },
+    );
+  }
+
+  /// Scan or type an AWB and show the order behind it.
+  Widget _findBar() {
+    return FlowCard(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _awbCtl,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (v) => _lookUp(v),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: 'Find order by AWB',
+                      prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                      suffixIcon: _awbCtl.text.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.close_rounded, size: 18),
+                              onPressed: () => setState(() {
+                                _awbCtl.clear();
+                                _hit = null;
+                              }),
+                            ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: AppColors.otpGradient,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: IconButton(
+                      tooltip: 'Scan',
+                      onPressed: store.busy ? null : _scan,
+                      icon: const Icon(Icons.qr_code_scanner_rounded, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_hit != null) _hitCard(_hit!),
+          if (_hit == null && store.lastScanError != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              child: Text(store.lastScanError!,
+                  style: const TextStyle(fontSize: 12, color: AppColors.danger)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _scan() async {
+    final code = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const ScanScreen()),
+    );
+    if (code == null || !mounted) return;
+    _awbCtl.text = code;
+    await _lookUp(code);
+  }
+
+  Future<void> _lookUp(String code) async {
+    if (code.trim().isEmpty) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _hit = null);
+    final hit = await store.findOrder(code);
+    if (mounted) setState(() => _hit = hit);
+  }
+
+  Widget _hitCard(OrderHit h) {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.skyLine, width: 1)),
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: h.image.isEmpty
+                ? Container(
+                    width: 110,
+                    height: 130,
+                    color: AppColors.sky,
+                    child: const Icon(Icons.image_not_supported_outlined,
+                        color: AppColors.ink2),
+                  )
+                : Image.network(
+                    h.image,
+                    width: 110,
+                    height: 130,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 110,
+                      height: 130,
+                      color: AppColors.sky,
+                      child: const Icon(Icons.broken_image_outlined, color: AppColors.ink2),
+                    ),
+                  ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(h.sku.isEmpty ? '(no SKU)' : h.sku,
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                if (h.productName.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(h.productName,
+                        style: const TextStyle(fontSize: 11.5, color: AppColors.ink2),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                const SizedBox(height: 10),
+                _hitLine('Sub-order', h.subOrderNum),
+                _hitLine('AWB', h.awb),
+                _hitLine('SLA', h.slaStatus.replaceAll('_', ' ')),
+                if (h.label.isNotEmpty) _hitLine('Label', h.label),
+                if (h.qty > 0) _hitLine('Qty', '${h.qty}'),
+                if (h.accountName.isNotEmpty) _hitLine('Account', h.accountName),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _hitLine(String label, String value) {
+    if (value.isEmpty) return const SizedBox.shrink();
+    final urgent = label == 'SLA' && value.toLowerCase().contains('breach');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 66,
+            child: Text(label,
+                style: const TextStyle(
+                    fontSize: 11.5, color: AppColors.ink2, fontWeight: FontWeight.w700)),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: urgent ? AppColors.danger : AppColors.navy,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
