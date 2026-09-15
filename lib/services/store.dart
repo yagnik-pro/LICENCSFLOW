@@ -889,7 +889,12 @@ class AppStore extends ChangeNotifier {
   /// Message from the last scan, for the UI.
   String? lastScanError;
 
-  /// Walks the orders payload for a sub-order containing [needle] anywhere.
+  /// Walks the orders payload for the scanned code.
+  ///
+  /// The AWB and packet id sit on the *group*, not on the sub-order — an
+  /// earlier version searched only the sub-order and so never matched an AWB.
+  /// The needle is checked against the group's awb and packet id as well as
+  /// everything inside the sub-order, so a sub-order number or SKU works too.
   static OrderHit? _matchOrder(dynamic data, String needle, String accountName) {
     OrderHit? found;
 
@@ -900,30 +905,60 @@ class AppStore extends ChangeNotifier {
       return '$node'.toUpperCase().contains(needle);
     }
 
-    void checkSub(dynamic sub, String awbFromOrder) {
-      if (found != null || sub is! Map) return;
-      if (!holds(sub, 0) && !awbFromOrder.toUpperCase().contains(needle)) return;
-      final m = sub.map((k, v) => MapEntry(k.toString(), v));
-      found = OrderHit(
-        accountName: accountName,
-        image: MeeshoApi.digInto(m, const ['image', 'image_url', 'product_image']) ?? '',
-        sku: MeeshoApi.digInto(m, const [
-              'product_sku', 'sku', 'sku_id', 'seller_sku', 'supplier_sku',
-            ]) ??
-            '',
-        productName: MeeshoApi.digInto(m, const ['name', 'product_name', 'title']) ?? '',
-        subOrderNum: MeeshoApi.digInto(m, const [
-              'sub_order_num', 'sub_order_no', 'sub_order_id', 'id',
-            ]) ??
-            '',
-        awb: MeeshoApi.digInto(m, const [
-              'awb', 'awb_number', 'awb_no', 'tracking_number', 'waybill',
-            ]) ??
-            awbFromOrder,
-        slaStatus: MeeshoApi.digInto(m, const ['sla_status', 'slaStatus', 'sla']) ?? '',
-        label: MeeshoApi.digInto(m, const ['label']) ?? '',
-        qty: _int(m, const ['quantity', 'qty']) ?? 1,
-      );
+    void walkGroup(dynamic g) {
+      if (found != null || g is! Map) return;
+      final gm = g.map((k, v) => MapEntry(k.toString(), v));
+
+      final awb = MeeshoApi.digInto(gm, const [
+            'awb', 'awb_number', 'awb_no', 'tracking_number', 'waybill',
+          ]) ??
+          '';
+      final packet = MeeshoApi.digInto(gm, const ['packet_id', 'packetId']) ?? '';
+      final groupHit = awb.toUpperCase().contains(needle) ||
+          packet.toUpperCase().contains(needle);
+      final carrier = MeeshoApi.digInto(gm, const ['carrier_name', 'carrier']) ?? '';
+
+      final orders = gm['orders'];
+      if (orders is! List) return;
+
+      for (final o in orders) {
+        if (found != null || o is! Map) break;
+        final om = o.map((k, v) => MapEntry(k.toString(), v));
+        final subs = om['sub_orders'];
+        final list = subs is List ? subs : [o];
+
+        for (final sb in list) {
+          if (found != null || sb is! Map) break;
+          if (!groupHit && !holds(sb, 0)) continue;
+
+          final m = sb.map((k, v) => MapEntry(k.toString(), v));
+          found = OrderHit(
+            accountName: accountName,
+            image: MeeshoApi.digInto(m, const ['image', 'image_url', 'product_image']) ?? '',
+            sku: MeeshoApi.digInto(m, const [
+                  'product_sku', 'sku', 'sku_id', 'seller_sku', 'supplier_sku',
+                ]) ??
+                '',
+            productName: MeeshoApi.digInto(m, const ['name', 'product_name', 'title']) ?? '',
+            subOrderNum: MeeshoApi.digInto(m, const [
+                  'sub_order_num', 'sub_order_no', 'sub_order_id', 'id',
+                ]) ??
+                '',
+            awb: awb,
+            packetId: packet,
+            carrier: carrier,
+            orderNum: MeeshoApi.digInto(om, const ['order_num', 'order_number']) ?? '',
+            slaStatus: MeeshoApi.digInto(m, const ['sla_status', 'slaStatus', 'sla']) ?? '',
+            dispatchBy: MeeshoApi.digInto(m, const [
+                  'expected_dispatch_date_iso', 'expected_dispatch_date',
+                ]) ??
+                '',
+            label: MeeshoApi.digInto(m, const ['label']) ?? '',
+            variation: MeeshoApi.digInto(m, const ['variation', 'size']) ?? '',
+            qty: _int(m, const ['quantity', 'qty']) ?? 1,
+          );
+        }
+      }
     }
 
     void walk(dynamic node, int depth) {
@@ -935,27 +970,13 @@ class AppStore extends ChangeNotifier {
         return;
       }
       if (node is! Map) return;
-      final m = node.map((k, v) => MapEntry(k.toString(), v));
-      final orders = m['orders'];
-      if (orders is List) {
-        for (final o in orders) {
-          if (o is! Map) continue;
-          final awb = MeeshoApi.digInto(
-                o.map((k, v) => MapEntry(k.toString(), v)),
-                const ['awb', 'awb_number', 'tracking_number', 'waybill'],
-              ) ??
-              '';
-          final subs = o['sub_orders'];
-          if (subs is List) {
-            for (final sb in subs) {
-              checkSub(sb, awb);
-            }
-          } else {
-            checkSub(o, awb);
-          }
+      final groups = node['groups'];
+      if (groups is List) {
+        for (final g in groups) {
+          walkGroup(g);
         }
       }
-      for (final v in m.values) {
+      for (final v in node.values) {
         walk(v, depth + 1);
       }
     }
