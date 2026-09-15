@@ -14,12 +14,6 @@ class PaymentsScreen extends StatefulWidget {
 }
 
 class _PaymentsScreenState extends State<PaymentsScreen> {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => store.loadSummaries());
-  }
-
   String _money(num? v) {
     if (v == null) return '—';
     final s = v.round().toString();
