@@ -16,12 +16,6 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => store.loadSummaries());
-  }
-
   String _money(num? v) {
     if (v == null) return '—';
     final s = v.round().toString();
@@ -76,6 +70,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: ListView(
                         padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
                         children: [
+                          if (!store.accounts.any((a) => a.summary.fetchedAt != null))
+                            Container(
+                              margin: const EdgeInsets.only(bottom: 14),
+                              padding: const EdgeInsets.all(13),
+                              decoration: BoxDecoration(
+                                color: AppColors.sky,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.download_rounded,
+                                      size: 18, color: AppColors.blueDeep),
+                                  const SizedBox(width: 9),
+                                  const Expanded(
+                                    child: Text(
+                                      'Figures are not loaded yet. Tap refresh to fetch them.',
+                                      style: TextStyle(fontSize: 12.5, color: AppColors.ink2),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           Row(
                             children: [
                               Expanded(
@@ -95,12 +111,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               ),
                             ],
                           ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _bigTile(
+                                  'OTPs waiting',
+                                  '${store.totalOtps}',
+                                  Icons.vpn_key_outlined,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _bigTile(
+                                  'Accounts',
+                                  '${store.accounts.length}',
+                                  Icons.storefront_outlined,
+                                ),
+                              ),
+                            ],
+                          ),
                           if (store.hasOrderCounts) ...[
                             const SizedBox(height: 10),
                             Row(
                               children: [
                                 Expanded(
-                                  child: _bigTile('Pending orders',
+                                  child: _bigTile('Pending',
                                       _count(store.totalPendingOrders), Icons.inventory_2_outlined),
                                 ),
                                 const SizedBox(width: 10),
@@ -151,8 +187,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                         _miniStat('OTPs', '${a.otps.length}'),
                                         if (s.pendingOrders != null)
                                           _miniStat('Pending', _count(s.pendingOrders)),
+                                        if (s.readyToShip != null)
+                                          _miniStat('Ready', _count(s.readyToShip)),
+                                        if (s.readyToShip != null)
+                                          _miniStat('Ready', _count(s.readyToShip)),
+                                        if (s.onHold != null)
+                                          _miniStat('On hold', _count(s.onHold)),
                                       ],
                                     ),
+                                    if (s.ordersNote != null) ...[
+                                      const SizedBox(height: 8),
+                                      Text(s.ordersNote!,
+                                          style: const TextStyle(
+                                              fontSize: 11.5, color: AppColors.ink2)),
+                                    ],
                                     if (s.error != null) ...[
                                       const SizedBox(height: 8),
                                       Text(s.error!,
@@ -174,8 +222,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                           const SizedBox(height: 6),
                           const Text(
-                            'Order counts are not here yet — the endpoint Meesho uses for them '
-                            'has not been identified, and a wrong number is worse than none.',
+                            'The first load opens your Orders page once to learn how Meesho asks '
+                            'for order counts. After that it is a plain API call.',
                             style: TextStyle(fontSize: 12, color: AppColors.ink2, height: 1.4),
                           ),
                         ],
@@ -186,6 +234,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
         );
       },
     );
+  }
+
+  /// Whatever Meesho said about order counts, rather than a generic line —
+  /// that text is what tells us which key to read next.
+  String _ordersNote() {
+    for (final a in store.accounts) {
+      final n = a.summary.ordersNote;
+      if (n != null && n.isNotEmpty) return n;
+    }
+    return 'Order counts show up once Meesho returns them.';
   }
 
   Widget _bigTile(String label, String value, IconData icon) {
