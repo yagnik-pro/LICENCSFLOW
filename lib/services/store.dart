@@ -682,11 +682,11 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  /// The SKU lines behind the "not downloaded" count.
+  /// SKU lines behind one of the ready-to-ship label states.
   ///
   /// The same orders endpoint carries them — a count asks for one row, this
-  /// asks for a page and reads the groups whose label has not been downloaded.
-  Future<void> loadRtsPendingSkus(Account a) async {
+  /// asks for a page and keeps the groups in the state we want.
+  Future<void> loadRtsSkus(Account a, {required bool downloaded}) async {
     if (a.supplierId.isEmpty || a.identifier.isEmpty || busy) return;
     busy = true;
     busyLabel = 'Reading SKUs…';
@@ -716,9 +716,17 @@ class AppStore extends ChangeNotifier {
           if (c.isNotEmpty) a.cookies = c;
         },
       );
-      a.summary.rtsPendingSkus = _skusAwaitingLabel(res);
-      if (a.summary.rtsPendingSkus.isEmpty) {
-        a.summary.ordersNote = 'No SKU lines came back for the pending labels';
+      final lines = _skusByLabelState(res, downloaded);
+      if (downloaded) {
+        a.summary.rtsDoneSkus = lines;
+      } else {
+        a.summary.rtsPendingSkus = lines;
+      }
+      if (lines.isEmpty) {
+        a.summary.ordersNote =
+            'No SKU lines came back for ${downloaded ? "downloaded" : "pending"} labels';
+      } else {
+        a.summary.ordersNote = null;
       }
       await _save();
     } on TooManyRequests {
@@ -732,9 +740,9 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  /// Walks `data.groups`, keeps the ones still waiting for a label, and totals
+  /// Walks `data.groups`, keeps the ones in the wanted label state, and totals
   /// each SKU across their sub-orders.
-  static List<SkuLine> _skusAwaitingLabel(dynamic data) {
+  static List<SkuLine> _skusByLabelState(dynamic data, bool downloaded) {
     final totals = <String, SkuLine>{};
 
     void addSub(dynamic sub) {
@@ -747,7 +755,7 @@ class AppStore extends ChangeNotifier {
       final prev = totals[sku];
       totals[sku] = SkuLine(
         sku: sku,
-        name: prev?.name.isNotEmpty == true ? prev!.name : name,
+        name: (prev != null && prev.name.isNotEmpty) ? prev.name : name,
         qty: (prev?.qty ?? 0) + qty,
       );
     }
@@ -755,20 +763,19 @@ class AppStore extends ChangeNotifier {
     void walkGroup(dynamic g) {
       if (g is! Map) return;
       final m = g.map((k, v) => MapEntry(k.toString(), v));
-      final downloaded = m['label_downloaded'];
-      if (downloaded == true) return; // already has its label
+      final state = m['label_downloaded'] == true;
+      if (state != downloaded) return;
       final orders = m['orders'];
-      if (orders is List) {
-        for (final o in orders) {
-          if (o is! Map) continue;
-          final subs = o['sub_orders'];
-          if (subs is List) {
-            for (final sb in subs) {
-              addSub(sb);
-            }
-          } else {
-            addSub(o);
+      if (orders is! List) return;
+      for (final o in orders) {
+        if (o is! Map) continue;
+        final subs = o['sub_orders'];
+        if (subs is List) {
+          for (final sb in subs) {
+            addSub(sb);
           }
+        } else {
+          addSub(o);
         }
       }
     }
@@ -794,8 +801,7 @@ class AppStore extends ChangeNotifier {
     }
 
     find(data, 0);
-    final out = totals.values.toList()..sort((x, y) => y.qty.compareTo(x.qty));
-    return out;
+    return totals.values.toList()..sort((x, y) => y.qty.compareTo(x.qty));
   }
 
   /// Loads figures for every account, one at a time.
