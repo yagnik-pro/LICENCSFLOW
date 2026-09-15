@@ -580,68 +580,86 @@ class AppStore extends ChangeNotifier {
     return out;
   }
 
-  /// Order counts per status.
+  /// Order counts, straight from the API — no page visit.
   ///
-  /// The body is not invented: it is the exact request the Orders page makes,
-  /// captured once and replayed with only `type` swapped. A hand-written body
-  /// comes back 500 — this endpoint wants `enable_hold`, a numeric `status`,
-  /// `limit` and the supplier's name, none of which are guessable.
+  /// The type/status pairs below came off the panel's own requests:
+  /// hold = 0, pending = 1, ready-to-ship = 3. They are not guessable — `hold`
+  /// is not `on_hold`, and `ready-to-ship` uses hyphens — and a wrong pair is
+  /// answered with a 500.
+  ///
+  /// One request per tab returns `total_count`, and for ready-to-ship also
+  /// `label_not_downloaded_count`, which gives the downloaded split for free.
   Future<void> _loadOrderCounts(Account a) async {
     if (a.supplierId.isEmpty || a.identifier.isEmpty) return;
     final s = a.summary;
+    final id = int.tryParse(a.supplierId) ?? a.supplierId;
 
-    // Without a captured template there is nothing safe to send.
-    if (a.ordersTemplate.isEmpty) {
-      s.ordersNote = 'Order counts need one visit to the Orders page - tap refresh again';
-      return;
-    }
-
-    Map<String, dynamic> base;
-    try {
-      base = Map<String, dynamic>.from(jsonDecode(a.ordersTemplate) as Map);
-    } catch (_) {
-      a.ordersTemplate = '';
-      s.ordersNote = 'Saved orders request could not be read';
-      return;
-    }
-
-    Future<int?> countFor(String type) async {
-      final body = Map<String, dynamic>.from(base)
-        ..['type'] = type
-        ..['cursor'] = null
-        // One row is enough; we only want the total.
-        ..['limit'] = 1;
+    Future<Map<String, int>?> countFor(String type, int status) async {
       try {
         final res = await WebSession.apiCall(
           a.cookies,
-          a.ordersUrl.isEmpty ? '/api/fulfillment/orders' : a.ordersUrl,
+          '/api/fulfillment/orders',
           identifier: a.identifier,
           storage: a.storage,
-          body: body,
+          body: {
+            'enable_hold': true,
+            'supplier_details': {
+              'id': id,
+              'identifier': a.identifier,
+              'name': a.name,
+            },
+            'cursor': null,
+            // One row is plenty; we only read the totals.
+            'limit': 1,
+            'status': status,
+            'type': type,
+            'identifier': a.identifier,
+            'child_supplier_identifier': null,
+            'child_supplier_id': null,
+          },
           onCookies: (c) {
             if (c.isNotEmpty) a.cookies = c;
           },
         );
-        final n = _int(res, const ['total_count', 'totalCount', 'count', 'total']);
-        if (n == null) s.ordersNote = 'No count returned for "$type"';
-        return n;
+        final total = _int(res, const ['total_count', 'totalCount']);
+        if (total == null) {
+          s.ordersNote = 'No count returned for "$type"';
+          return null;
+        }
+        final notDownloaded =
+            _int(res, const ['label_not_downloaded_count', 'labelNotDownloadedCount']);
+        return {
+          'total': total,
+          if (notDownloaded != null) 'notDownloaded': notDownloaded,
+        };
       } on TooManyRequests {
         rethrow;
       } catch (e) {
-        // A stale template is the usual cause; drop it so the next refresh
-        // captures a fresh one.
-        a.ordersTemplate = '';
         s.ordersNote = 'Orders ($type): ${e.toString().replaceFirst('Exception: ', '')}';
         return null;
       }
     }
 
     try {
-      s.pendingOrders = await countFor('pending');
-      if (a.ordersTemplate.isNotEmpty) {
-        s.readyToShip = await countFor('ready_to_ship');
+      final hold = await countFor('hold', 0);
+      if (hold != null) s.onHold = hold['total'];
+
+      final pending = await countFor('pending', 1);
+      if (pending != null) s.pendingOrders = pending['total'];
+
+      final rts = await countFor('ready-to-ship', 3);
+      if (rts != null) {
+        s.readyToShip = rts['total'];
+        final pendingLabel = rts['notDownloaded'];
+        if (pendingLabel != null) {
+          s.rtsLabelPending = pendingLabel;
+          s.rtsLabelDone = (rts['total']! - pendingLabel).clamp(0, rts['total']!);
+        }
       }
-      if (s.pendingOrders != null || s.readyToShip != null) s.ordersNote = null;
+
+      if (s.onHold != null || s.pendingOrders != null || s.readyToShip != null) {
+        s.ordersNote = null;
+      }
     } on TooManyRequests {
       s.error ??= 'Too many requests - wait a minute, then refresh';
     }
@@ -698,6 +716,11 @@ class AppStore extends ChangeNotifier {
 
   /// True once at least one account reported an order count. Until then the
   /// Dashboard hides those tiles rather than showing a misleading zero.
+  int get totalLabelPending =>
+      accounts.fold<int>(0, (t, a) => t + (a.summary.rtsLabelPending ?? 0));
+  int get totalLabelDone =>
+      accounts.fold<int>(0, (t, a) => t + (a.summary.rtsLabelDone ?? 0));
+
   bool get hasOrderCounts => accounts.any((a) =>
       a.summary.pendingOrders != null ||
       a.summary.readyToShip != null ||
