@@ -144,8 +144,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   child: _bigTile('Ready to ship',
                                       _count(store.totalReadyToShip), Icons.local_shipping_outlined),
                                 ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _bigTile('On hold',
+                                      _count(store.totalOnHold), Icons.pause_circle_outline),
+                                ),
                               ],
                             ),
+                            if (store.totalLabelPending > 0 || store.totalLabelDone > 0) ...[
+                              const SizedBox(height: 10),
+                              FlowCard(
+                                margin: EdgeInsets.zero,
+                                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.receipt_long_outlined,
+                                        size: 18, color: AppColors.blue),
+                                    const SizedBox(width: 10),
+                                    const Expanded(
+                                      child: Text('Ready to ship labels',
+                                          style: TextStyle(
+                                              fontSize: 13, fontWeight: FontWeight.w700)),
+                                    ),
+                                    _labelChip('Not downloaded', store.totalLabelPending,
+                                        AppColors.warn),
+                                    const SizedBox(width: 8),
+                                    _labelChip('Downloaded', store.totalLabelDone, AppColors.mint),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ],
                           const SizedBox(height: 18),
                           const Text('By account',
@@ -189,8 +217,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           _miniStat('Pending', _count(s.pendingOrders)),
                                         if (s.readyToShip != null)
                                           _miniStat('Ready', _count(s.readyToShip)),
+                                        if (s.onHold != null)
+                                          _miniStat('On hold', _count(s.onHold)),
                                         if (s.readyToShip != null)
                                           _miniStat('Ready', _count(s.readyToShip)),
+                                        if (s.onHold != null)
+                                          _miniStat('On hold', _count(s.onHold)),
                                         if (s.onHold != null)
                                           _miniStat('On hold', _count(s.onHold)),
                                       ],
@@ -266,6 +298,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   fontSize: 11.5, color: AppColors.ink2, fontWeight: FontWeight.w600)),
         ],
       ),
+    );
+  }
+
+  Widget _labelChip(String label, int value, Color colour) {
+    return Column(
+      children: [
+        Text('$value',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: colour)),
+        Text(label,
+            style: const TextStyle(
+                fontSize: 10.5, color: AppColors.ink2, fontWeight: FontWeight.w600)),
+      ],
     );
   }
 
