@@ -292,6 +292,22 @@ class WebSession {
     } catch (_) {}
   }
 
+  /// Throws the shared WebView away so the next call builds a fresh one.
+  ///
+  /// Android reclaims WebView renderers while the app sits in the background.
+  /// The Dart object survives, but every call into it then fails with
+  /// "Failed to fetch", and reloading a page inside a dead renderer does not
+  /// help — only a new instance does.
+  static Future<void> resetHeadless() async {
+    final old = _headless;
+    _headless = null;
+    _ctl = null;
+    _documentOwner = '';
+    try {
+      await old?.dispose();
+    } catch (_) {}
+  }
+
   // ======================================================= headless instance
   static Future<InAppWebViewController> _ensureHeadless() async {
     if (_ctl != null) return _ctl!;
@@ -353,7 +369,7 @@ class WebSession {
   }) {
     return _lock.run(() async {
       await _installCookies(cookies);
-      final c = await _ensureHeadless();
+      var c = await _ensureHeadless();
 
       // fetch() must run from a document on the Meesho origin, and that
       // document has to belong to this account.
@@ -387,9 +403,15 @@ class WebSession {
           // A JS-level "Failed to fetch" means the document went stale, not
           // that the client-type is wrong — reload once and try the same
           // values again rather than burning requests on other types.
-          for (var attempt = 0; attempt < 2; attempt++) {
+          for (var attempt = 0; attempt < 3; attempt++) {
             if (attempt == 1) {
               log.writeln('  reloading the page and retrying');
+              await _reload(c, loginUrl);
+              await installStorage(c, storage);
+            } else if (attempt == 2) {
+              log.writeln('  rebuilding the WebView and retrying');
+              await resetHeadless();
+              c = await _ensureHeadless();
               await _reload(c, loginUrl);
               await installStorage(c, storage);
             }
@@ -432,9 +454,9 @@ class WebSession {
               throw TooManyRequests();
             }
 
-            // Stale document: worth one reload, then give up on this pass.
+            // Dead renderer: reload, then rebuild, then stop.
             if (status == -1) {
-              if (attempt == 1) break outer;
+              if (attempt == 2) break outer;
               continue;
             }
 
