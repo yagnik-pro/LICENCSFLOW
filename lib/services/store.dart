@@ -517,10 +517,71 @@ class AppStore extends ChangeNotifier {
       // The 7-day figure above is the important one; a missing list is fine.
     }
 
+    await _loadOrders(a);
+
+    await _loadOrderCounts(a);
+
     s.fetchedAt = DateTime.now().millisecondsSinceEpoch;
     await _save();
     notifyListeners();
   }
+
+  /// Order counts per status.
+  ///
+  /// The panel groups orders as `pending` and `ready-to-ship`; those are the
+  /// exact strings it sends. We ask for a single row and read the total off the
+  /// response, so this stays one small request per status.
+  ///
+  /// `reqPendingOrders` looks like the endpoint for this but is not — it drives
+  /// the bulk SKU report and answers with a validation complaint about
+  /// `requested_status` and `max_transitions`.
+  Future<void> _loadOrderCounts(Account a) async {
+    if (a.supplierId.isEmpty || a.identifier.isEmpty) return;
+    final s = a.summary;
+
+    Future<int?> countFor(String status) async {
+      try {
+        final res = await WebSession.apiCall(
+          a.cookies,
+          '/api/fulfillment/orders',
+          identifier: a.identifier,
+          storage: a.storage,
+          body: {
+            'supplier_details': {
+              'identifier': a.identifier,
+              'id': int.tryParse(a.supplierId) ?? a.supplierId,
+            },
+            'status': status,
+            'page': 1,
+            'size': 1,
+          },
+          onCookies: (c) {
+            if (c.isNotEmpty) a.cookies = c;
+          },
+        );
+        final n = _int(res, const ['total_count', 'totalCount', 'count', 'total']);
+        if (n == null) {
+          // Keep what it did say - guessing at the next key is how the wrong
+          // numbers crept in before.
+          s.ordersNote = 'Meesho returned no count for "$status"';
+        }
+        return n;
+      } on TooManyRequests {
+        rethrow;
+      } catch (e) {
+        s.ordersNote = 'Orders ($status): ${e.toString().replaceFirst('Exception: ', '')}';
+        return null;
+      }
+    }
+
+    try {
+      s.pendingOrders = await countFor('pending');
+      s.readyToShip = await countFor('ready-to-ship');
+    } on TooManyRequests {
+      s.error ??= 'Too many requests - wait a minute, then refresh';
+    }
+  }
+
 
   /// Turns Meesho's payoutUIList / payoutList into rows we can show. The shape
   /// varies, so each entry is searched for a label, an amount and a date rather
@@ -572,6 +633,101 @@ class AppStore extends ChangeNotifier {
     return out;
   }
 
+  /// Order counts for the Dashboard.
+  ///
+  /// The first run watches the panel's own Orders page and keeps the request it
+  /// sends; after that the same shape is reused as a direct API call, with only
+  /// the status swapped. Guessing that body produced nothing but 400s.
+  Future<void> _loadOrders(Account a) async {
+    final s = a.summary;
+
+    if (a.ordersTemplate.isEmpty) {
+      try {
+        final probe = await WebSession.discoverOrders(
+          a.cookies,
+          a.identifier,
+          storage: a.storage,
+        );
+        if (probe.isEmpty) {
+          s.ordersNote = 'Meesho did not expose an order count for this account';
+          return;
+        }
+        // Keep the richest request we saw; that is the one listing orders.
+        final best = probe.calls.reduce(
+            (x, y) => y.request.length > x.request.length ? y : x);
+        a.ordersTemplate = best.request;
+        a.ordersUrl = Uri.parse(best.url).path;
+        _readOrderCounts(a, best.response);
+        await _save();
+        return;
+      } on SessionExpired {
+        rethrow;
+      } catch (e) {
+        s.ordersNote = e.toString().replaceFirst('Exception: ', '');
+        return;
+      }
+    }
+
+    try {
+      final body = jsonDecode(a.ordersTemplate);
+      final data = await WebSession.apiCall(
+        a.cookies,
+        a.ordersUrl.isEmpty ? '/api/fulfillment/orders' : a.ordersUrl,
+        identifier: a.identifier,
+        storage: a.storage,
+        body: body is Map<String, dynamic> ? body : <String, dynamic>{},
+        onCookies: (c) {
+          if (c.isNotEmpty) a.cookies = c;
+        },
+      );
+      _readOrderCounts(a, data);
+    } on TooManyRequests {
+      s.error ??= 'Too many requests - wait a minute, then refresh';
+    } catch (_) {
+      // Template went stale; learn it again next time.
+      a.ordersTemplate = '';
+    }
+  }
+
+  /// Pulls whatever counts the orders response carries.
+  void _readOrderCounts(Account a, dynamic data) {
+    dynamic decoded = data;
+    if (data is String) {
+      try {
+        decoded = jsonDecode(data);
+      } catch (_) {
+        return;
+      }
+    }
+    final s = a.summary;
+    s.pendingOrders = _int(decoded, const [
+      'pending_orders_count', 'pendingOrdersCount', 'pending_count', 'pending_orders', 'pending',
+    ]);
+    s.readyToShip = _int(decoded, const [
+      'ready_to_ship_count', 'readyToShipCount', 'rts_count', 'ready_to_ship', 'readyToShip',
+    ]);
+    s.onHold = _int(decoded, const [
+      'on_hold_count', 'onHoldCount', 'hold_count', 'on_hold', 'onHold',
+    ]);
+
+    // Nothing named? Fall back to the length of whatever list came back.
+    if (s.pendingOrders == null && decoded is Map) {
+      for (final key in const ['orders', 'order_list', 'orderList', 'data', 'results']) {
+        final v = decoded[key];
+        if (v is List) {
+          s.pendingOrders = v.length;
+          break;
+        }
+      }
+    }
+    if (s.pendingOrders == null && s.readyToShip == null && s.onHold == null) {
+      s.ordersNote = 'Orders came back, but with no count we could read';
+      MeeshoApi.lastRawResponse = WebSession.lastDebug;
+    } else {
+      s.ordersNote = null;
+    }
+  }
+
   /// Loads figures for every account, one at a time.
   Future<void> loadSummaries({bool force = false}) async {
     if (busy || accounts.isEmpty) return;
@@ -619,10 +775,14 @@ class AppStore extends ChangeNotifier {
   int get totalReadyToShip =>
       accounts.fold<int>(0, (t, a) => t + (a.summary.readyToShip ?? 0));
 
+  int get totalOnHold => accounts.fold<int>(0, (t, a) => t + (a.summary.onHold ?? 0));
+
   /// True once at least one account reported an order count. Until then the
   /// Dashboard hides those tiles rather than showing a misleading zero.
-  bool get hasOrderCounts =>
-      accounts.any((a) => a.summary.pendingOrders != null || a.summary.readyToShip != null);
+  bool get hasOrderCounts => accounts.any((a) =>
+      a.summary.pendingOrders != null ||
+      a.summary.readyToShip != null ||
+      a.summary.onHold != null);
 
   void _notifyNew(Map<String, Set<String>> before) {
     for (final a in accounts) {
