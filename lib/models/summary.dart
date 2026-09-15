@@ -136,3 +136,28 @@ class SkuLine {
         qty: j['qty'] ?? 0,
       );
 }
+
+/// One order found by scanning or typing an AWB.
+class OrderHit {
+  final String accountName;
+  final String image;
+  final String sku;
+  final String productName;
+  final String subOrderNum;
+  final String awb;
+  final String slaStatus;
+  final String label;
+  final int qty;
+
+  const OrderHit({
+    this.accountName = '',
+    this.image = '',
+    this.sku = '',
+    this.productName = '',
+    this.subOrderNum = '',
+    this.awb = '',
+    this.slaStatus = '',
+    this.label = '',
+    this.qty = 0,
+  });
+}
