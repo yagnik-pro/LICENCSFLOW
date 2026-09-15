@@ -25,6 +25,10 @@ class AccountSummary {
   int? rtsLabelPending;
   int? rtsLabelDone;
 
+  /// SKU lines behind the "not downloaded" figure. Loaded only when that
+  /// number is tapped — it needs a bigger page of orders than a count does.
+  List<SkuLine> rtsPendingSkus;
+
   /// Why an order count is missing, when it is.
   String? ordersNote;
 
@@ -43,9 +47,11 @@ class AccountSummary {
     this.onHold,
     this.rtsLabelPending,
     this.rtsLabelDone,
+    List<SkuLine>? rtsPendingSkus,
     this.fetchedAt,
     this.error,
-  }) : payouts = payouts ?? [];
+  })  : payouts = payouts ?? [],
+        rtsPendingSkus = rtsPendingSkus ?? [];
 
   bool get hasAnything =>
       upcomingPayment != null ||
@@ -65,6 +71,7 @@ class AccountSummary {
         'onHold': onHold,
         'rtsLabelPending': rtsLabelPending,
         'rtsLabelDone': rtsLabelDone,
+        'rtsPendingSkus': rtsPendingSkus.map((e) => e.toJson()).toList(),
         'fetchedAt': fetchedAt,
       };
 
@@ -82,6 +89,9 @@ class AccountSummary {
         onHold: j['onHold'] as int?,
         rtsLabelPending: j['rtsLabelPending'] as int?,
         rtsLabelDone: j['rtsLabelDone'] as int?,
+        rtsPendingSkus: ((j['rtsPendingSkus'] ?? const []) as List)
+            .map((e) => SkuLine.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
         fetchedAt: j['fetchedAt'] as int?,
       );
 }
@@ -100,5 +110,22 @@ class PayoutRow {
         label: j['label'] ?? '',
         amount: j['amount'] as num?,
         date: j['date'] as String?,
+      );
+}
+
+/// One SKU line inside an order group.
+class SkuLine {
+  final String sku;
+  final String name;
+  final int qty;
+
+  const SkuLine({required this.sku, this.name = '', this.qty = 0});
+
+  Map<String, dynamic> toJson() => {'sku': sku, 'name': name, 'qty': qty};
+
+  factory SkuLine.fromJson(Map<String, dynamic> j) => SkuLine(
+        sku: j['sku'] ?? '',
+        name: j['name'] ?? '',
+        qty: j['qty'] ?? 0,
       );
 }
