@@ -17,6 +17,7 @@ dependencies:
   device_info_plus: ^11.1.1
   ed25519_edwards: ^0.3.1
   crypto: ^3.0.6
+  mobile_scanner: ^5.2.3
 
 dev_dependencies:
   flutter_test:
