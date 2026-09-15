@@ -17,8 +17,11 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   final _open = <String>{'pending'};
-  bool _labelsOpen = false;
-  String? _skuForAccount;
+
+  /// Which ready-to-ship account row is expanded, and which label state inside
+  /// it is showing its SKUs.
+  String? _openRts;
+  bool? _skuMode;
 
   String _count(int? v) => v == null ? '—' : '$v';
 
@@ -91,11 +94,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           _section(
                             id: 'rts',
                             title: 'Ready to Ship',
-                            icon: Icons.local_shipping_outlined,
+                            icon: Icons.outbox_rounded,
                             colour: AppColors.blue,
                             total: store.totalReadyToShip,
                             valueOf: (a) => a.summary.readyToShip,
-                            extra: _labelSplit(),
+                            extra: _labelTotals(),
                           ),
                           const SizedBox(height: 8),
                           const Text(
@@ -185,11 +188,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           if (open) ...[
-            ...store.accounts.map((a) => _accountRow(a, valueOf(a), colour)),
+            ...store.accounts.map((a) => id == 'rts'
+                ? _rtsAccountRow(a, colour)
+                : _accountRow(a, valueOf(a), colour)),
             if (extra != null) extra,
           ],
         ],
       ),
+    );
+  }
+
+  /// Store name, number, email and when it was last read — shared by every row.
+  Widget _accountLabel(Account a) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          TextSpan(children: [
+            TextSpan(
+              text: a.name,
+              style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800),
+            ),
+            if (a.phone.isNotEmpty)
+              TextSpan(
+                text: '  (${a.phone})',
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.ink2),
+              ),
+          ]),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        Text(a.email,
+            style: const TextStyle(fontSize: 11.5, color: AppColors.ink2),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis),
+        Text('Ref: ${_ago(a.summary.fetchedAt)}',
+            style: const TextStyle(fontSize: 10.5, color: AppColors.ink2)),
+      ],
     );
   }
 
@@ -201,35 +237,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
       child: Row(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text.rich(
-                  TextSpan(children: [
-                    TextSpan(
-                      text: a.name,
-                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800),
-                    ),
-                    if (a.phone.isNotEmpty)
-                      TextSpan(
-                        text: '  (${a.phone})',
-                        style: const TextStyle(
-                            fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.ink2),
-                      ),
-                  ]),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(a.email,
-                    style: const TextStyle(fontSize: 11.5, color: AppColors.ink2),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis),
-                Text('Ref: ${_ago(a.summary.fetchedAt)}',
-                    style: const TextStyle(fontSize: 10.5, color: AppColors.ink2)),
-              ],
-            ),
-          ),
+          Expanded(child: _accountLabel(a)),
           const SizedBox(width: 8),
           Text(_count(value),
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: colour)),
@@ -244,44 +252,188 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  /// Ready-to-ship splits by label state; tapping through the pending figure
-  /// loads the SKU lines behind it.
-  Widget _labelSplit() {
+  /// Ready-to-ship totals for every account, so the section footer still says
+  /// what the whole business looks like.
+  Widget _labelTotals() {
     final pending = store.totalLabelPending;
     final done = store.totalLabelDone;
     if (pending == 0 && done == 0) return const SizedBox.shrink();
 
-    return Column(
-      children: [
-        Container(
-          decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: AppColors.skyLine, width: 1)),
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.skyLine, width: 1)),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+      child: Row(
+        children: [
+          const Icon(Icons.receipt_long_outlined, size: 18, color: AppColors.blue),
+          const SizedBox(width: 9),
+          const Expanded(
+            child: Text('All accounts',
+                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
           ),
-          child: InkWell(
-            onTap: () => setState(() => _labelsOpen = !_labelsOpen),
+          _chip('Downloaded', done, AppColors.mint),
+          const SizedBox(width: 16),
+          _chip('Not downloaded', pending, AppColors.warn),
+        ],
+      ),
+    );
+  }
+
+  /// A ready-to-ship row that opens into its own label split, and from there
+  /// into the SKUs behind either figure.
+  Widget _rtsAccountRow(Account a, Color colour) {
+    final open = _openRts == a.id;
+    final s = a.summary;
+
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.skyLine, width: 1)),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () => setState(() {
+              _openRts = open ? null : a.id;
+              _skuMode = null;
+            }),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+              padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
               child: Row(
                 children: [
-                  const Icon(Icons.receipt_long_outlined, size: 18, color: AppColors.blue),
-                  const SizedBox(width: 9),
-                  const Expanded(
-                    child: Text('Labels',
-                        style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+                  Expanded(child: _accountLabel(a)),
+                  const SizedBox(width: 8),
+                  Text(_count(s.readyToShip),
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: colour)),
+                  IconButton(
+                    tooltip: 'Refresh ${a.name}',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: store.busy ? null : () => store.refreshSummaryFor(a),
+                    icon: Icon(Icons.refresh_rounded, size: 18, color: colour),
                   ),
-                  _chip('Not downloaded', pending, AppColors.warn),
-                  const SizedBox(width: 12),
-                  _chip('Downloaded', done, AppColors.mint),
-                  const SizedBox(width: 4),
-                  Icon(_labelsOpen ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                  Icon(open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
                       size: 20, color: AppColors.ink2),
                 ],
               ),
             ),
           ),
+          if (open) _labelPicker(a),
+        ],
+      ),
+    );
+  }
+
+  Widget _labelPicker(Account a) {
+    final s = a.summary;
+    final done = s.rtsLabelDone ?? 0;
+    final pending = s.rtsLabelPending ?? 0;
+
+    return Container(
+      color: AppColors.paper,
+      padding: const EdgeInsets.fromLTRB(18, 10, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: _labelButton(a, 'Downloaded', done, AppColors.mint, true)),
+              const SizedBox(width: 10),
+              Expanded(child: _labelButton(a, 'Not downloaded', pending, AppColors.warn, false)),
+            ],
+          ),
+          if (_skuMode != null && _openRts == a.id) ...[
+            const SizedBox(height: 12),
+            _skuTable(a, _skuMode!),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _labelButton(Account a, String label, int value, Color colour, bool downloaded) {
+    final active = _openRts == a.id && _skuMode == downloaded;
+    return InkWell(
+      onTap: value == 0
+          ? null
+          : () async {
+              final want = active ? null : downloaded;
+              setState(() => _skuMode = want);
+              if (want == null) return;
+              final have = downloaded ? a.summary.rtsDoneSkus : a.summary.rtsPendingSkus;
+              if (have.isEmpty) await store.loadRtsSkus(a, downloaded: downloaded);
+            },
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: active ? colour.withOpacity(.14) : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: active ? colour : AppColors.skyLine, width: 1.4),
         ),
-        if (_labelsOpen)
-          ...store.accounts.where((a) => (a.summary.rtsLabelPending ?? 0) > 0).map(_skuBlock),
+        child: Column(
+          children: [
+            Text('$value',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: colour)),
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 11, color: AppColors.ink2, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _skuTable(Account a, bool downloaded) {
+    final skus = downloaded ? a.summary.rtsDoneSkus : a.summary.rtsPendingSkus;
+
+    if (skus.isEmpty) {
+      return Text(
+        store.busy ? 'Reading SKUs…' : (a.summary.ordersNote ?? 'No SKU lines found'),
+        style: const TextStyle(fontSize: 12, color: AppColors.ink2),
+      );
+    }
+
+    return Column(
+      children: [
+        const Row(
+          children: [
+            Expanded(
+              child: Text('SKU',
+                  style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.ink2)),
+            ),
+            Text('Qty',
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.ink2)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        ...skus.map((k) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(k.sku,
+                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                        if (k.name.isNotEmpty)
+                          Text(k.name,
+                              style: const TextStyle(fontSize: 10.5, color: AppColors.ink2),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                      ],
+                    ),
+                  ),
+                  Text('${k.qty}',
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.navy)),
+                ],
+              ),
+            )),
       ],
     );
   }
@@ -295,102 +447,4 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   fontSize: 10, color: AppColors.ink2, fontWeight: FontWeight.w600)),
         ],
       );
-
-  Widget _skuBlock(Account a) {
-    final open = _skuForAccount == a.id;
-    final skus = a.summary.rtsPendingSkus;
-
-    return Container(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: AppColors.skyLine, width: 1)),
-      ),
-      child: Column(
-        children: [
-          InkWell(
-            onTap: () async {
-              setState(() => _skuForAccount = open ? null : a.id);
-              if (!open && skus.isEmpty) await store.loadRtsPendingSkus(a);
-            },
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 10, 14, 10),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text('${a.name} — ${a.summary.rtsLabelPending} awaiting label',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
-                  ),
-                  Icon(open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-                      size: 19, color: AppColors.ink2),
-                ],
-              ),
-            ),
-          ),
-          if (open)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 0, 14, 12),
-              child: skus.isEmpty
-                  ? Text(
-                      store.busy
-                          ? 'Reading SKUs…'
-                          : (a.summary.ordersNote ?? 'No SKU lines found'),
-                      style: const TextStyle(fontSize: 12, color: AppColors.ink2),
-                    )
-                  : Column(
-                      children: [
-                        const Row(
-                          children: [
-                            Expanded(
-                              child: Text('SKU',
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppColors.ink2)),
-                            ),
-                            Text('Qty',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.ink2)),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        ...skus.map((k) => Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 3),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(k.sku,
-                                            style: const TextStyle(
-                                                fontSize: 12.5, fontWeight: FontWeight.w700),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis),
-                                        if (k.name.isNotEmpty)
-                                          Text(k.name,
-                                              style: const TextStyle(
-                                                  fontSize: 10.5, color: AppColors.ink2),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis),
-                                      ],
-                                    ),
-                                  ),
-                                  Text('${k.qty}',
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w800,
-                                          color: AppColors.navy)),
-                                ],
-                              ),
-                            )),
-                      ],
-                    ),
-            ),
-        ],
-      ),
-    );
-  }
 }
